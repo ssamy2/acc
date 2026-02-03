@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Escrow Account Manager</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>🔐 Escrow Account Manager</h1>
+            <p>Secure Telegram Account Transfer System</p>
+        </header>
+
+        <!-- Progress Steps -->
+        <div class="steps-container">
+            <div class="step" id="step-1">
+                <div class="step-number">1</div>
+                <div class="step-label">Send Code</div>
+            </div>
+            <div class="step" id="step-2">
+                <div class="step-number">2</div>
+                <div class="step-label">Verify</div>
+            </div>
+            <div class="step" id="step-3">
+                <div class="step-number">3</div>
+                <div class="step-label">Audit</div>
+            </div>
+            <div class="step" id="step-4">
+                <div class="step-number">4</div>
+                <div class="step-label">Telethon</div>
+            </div>
+            <div class="step" id="step-5">
+                <div class="step-number">5</div>
+                <div class="step-label">Finalize</div>
+            </div>
+        </div>
+
+        <!-- Status Message -->
+        <div id="status-message" class="status-box hidden"></div>
+
+        <!-- Step 1: Phone Number -->
+        <div id="view-phone" class="view">
+            <div class="card">
+                <h2>Enter Phone Number</h2>
+                <p>Verification code will be sent to your Telegram account</p>
+                
+                <div class="input-group">
+                    <input type="tel" id="phone-input" placeholder="+201234567890" dir="ltr">
+                </div>
+                
+                <button id="btn-send-code" class="btn-primary" onclick="sendCode()">
+                    Send Verification Code
+                </button>
+            </div>
+        </div>
+
+        <!-- Step 2: Verify Code -->
+        <div id="view-code" class="view hidden">
+            <div class="card">
+                <h2>Enter Verification Code</h2>
+                <p>Code has been sent to your Telegram app</p>
+                
+                <div class="input-group">
+                    <input type="text" id="code-input" placeholder="12345" maxlength="5" dir="ltr">
+                </div>
+                
+                <button id="btn-verify-code" class="btn-primary" onclick="verifyCode()">
+                    Verify Code
+                </button>
+            </div>
+        </div>
+
+        <!-- Step 2.5: 2FA -->
+        <div id="view-2fa" class="view hidden">
+            <div class="card">
+                <h2>Two-Factor Authentication (2FA)</h2>
+                <p>This account is protected with an additional password</p>
+                
+                <div class="input-group">
+                    <input type="password" id="2fa-input" placeholder="Password">
+                </div>
+                
+                <button id="btn-verify-2fa" class="btn-primary" onclick="verify2FA()">
+                    Verify Password
+                </button>
+            </div>
+        </div>
+
+        <!-- Step 3: Security Audit -->
+        <div id="view-audit" class="view hidden">
+            <div class="card">
+                <h2>🔍 Security Audit</h2>
+                <p>Account will be checked for transfer readiness</p>
+                
+                <button id="btn-run-audit" class="btn-primary" onclick="runAudit()">
+                    Start Security Audit
+                </button>
+                
+                <div id="audit-log" class="log-box"></div>
+                
+                <button id="btn-proceed" class="btn-success hidden" onclick="proceedToTelethon()">
+                    Proceed to Create Telethon Session
+                </button>
+            </div>
+        </div>
+
+        <!-- Step 4: Telethon Session -->
+        <div id="view-telethon" class="view hidden">
+            <div class="card">
+                <h2>📱 Create Telethon Session</h2>
+                <p>Alternative session will be created using Telethon</p>
+                
+                <button id="btn-create-telethon" class="btn-primary" onclick="createTelethonSession()">
+                    Create Telethon Session
+                </button>
+                
+                <div id="telethon-log" class="log-box"></div>
+                
+                <button id="btn-finalize" class="btn-success hidden" onclick="finalizeAccount()">
+                    Finalize Process
+                </button>
+            </div>
+        </div>
+
+        <!-- Step 5: Complete -->
+        <div id="view-complete" class="view hidden">
+            <div class="card">
+                <div id="complete-message"></div>
+                
+                <button class="btn-primary" onclick="location.reload()">
+                    Start New Process
+                </button>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Escrow Account Manager v2.0 - Pyrogram + Telethon</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,579 @@
+/* Telegram Escrow Auditor V3 - Styles */
+
+:root {
+    --primary: #0088cc;
+    --primary-dark: #006699;
+    --success: #28a745;
+    --warning: #ffc107;
+    --danger: #dc3545;
+    --bg: #f5f7fa;
+    --card-bg: #ffffff;
+    --text: #333333;
+    --text-light: #666666;
+    --border: #e0e0e0;
+    --shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+/* Header */
+header {
+    text-align: center;
+    padding: 30px 0;
+}
+
+header h1 {
+    font-size: 2rem;
+    color: var(--primary);
+    margin-bottom: 10px;
+}
+
+header .subtitle {
+    color: var(--text-light);
+    font-size: 1.1rem;
+}
+
+/* Steps Progress */
+.steps {
+    display: flex;
+    justify-content: space-between;
+    margin: 30px 0;
+    padding: 0 10px;
+}
+
+.step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    position: relative;
+}
+
+.step::after {
+    content: '';
+    position: absolute;
+    top: 15px;
+    right: -50%;
+    width: 100%;
+    height: 2px;
+    background: var(--border);
+    z-index: 0;
+}
+
+.step:last-child::after {
+    display: none;
+}
+
+.step-num {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--border);
+    color: var(--text-light);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    z-index: 1;
+    transition: all 0.3s;
+}
+
+.step-label {
+    font-size: 0.75rem;
+    margin-top: 5px;
+    color: var(--text-light);
+    text-align: center;
+}
+
+.step.active .step-num {
+    background: var(--primary);
+    color: white;
+    box-shadow: 0 0 0 4px rgba(0,136,204,0.2);
+}
+
+.step.completed .step-num {
+    background: var(--success);
+    color: white;
+}
+
+.step.completed::after {
+    background: var(--success);
+}
+
+/* Cards */
+.card {
+    background: var(--card-bg);
+    border-radius: 12px;
+    padding: 30px;
+    box-shadow: var(--shadow);
+    margin-bottom: 20px;
+}
+
+.card h2 {
+    margin-bottom: 20px;
+    color: var(--primary);
+    font-size: 1.5rem;
+}
+
+/* Forms */
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+}
+
+.form-group input,
+.form-group select {
+    width: 100%;
+    padding: 12px 15px;
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    font-size: 1rem;
+    transition: border-color 0.3s;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+.form-group .hint {
+    display: block;
+    margin-top: 8px;
+    font-size: 0.85rem;
+    color: var(--text-light);
+    line-height: 1.5;
+}
+
+/* Buttons */
+.btn-primary,
+.btn-secondary,
+.btn-success {
+    display: inline-block;
+    padding: 12px 24px;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s;
+    width: 100%;
+    margin-top: 10px;
+}
+
+.btn-primary {
+    background: var(--primary);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: var(--primary-dark);
+}
+
+.btn-secondary {
+    background: var(--border);
+    color: var(--text);
+}
+
+.btn-secondary:hover {
+    background: #d0d0d0;
+}
+
+.btn-success {
+    background: var(--success);
+    color: white;
+}
+
+.btn-success:hover {
+    background: #218838;
+}
+
+.btn-copy {
+    background: transparent;
+    border: 1px solid var(--border);
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-right: 10px;
+}
+
+button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Status Messages */
+.status-box {
+    padding: 15px 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.status-box.success {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.status-box.error {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+.status-box.warning {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeeba;
+}
+
+.status-box.info {
+    background: #d1ecf1;
+    color: #0c5460;
+    border: 1px solid #bee5eb;
+}
+
+/* Hidden */
+.hidden {
+    display: none !important;
+}
+
+/* Email Box */
+.email-box {
+    background: #f8f9fa;
+    border: 2px dashed var(--primary);
+    padding: 15px 20px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 15px 0;
+    direction: ltr;
+}
+
+.email-box .label {
+    font-weight: 500;
+    margin-left: 10px;
+}
+
+.email-box .email-value {
+    font-family: monospace;
+    font-size: 1.1rem;
+    color: var(--primary);
+    flex: 1;
+    text-align: center;
+}
+
+/* Instructions */
+.instructions {
+    background: #e7f3ff;
+    padding: 20px;
+    border-radius: 8px;
+    margin: 15px 0;
+}
+
+.instructions h4 {
+    margin-bottom: 10px;
+    color: var(--primary);
+}
+
+.instructions ol {
+    padding-right: 20px;
+}
+
+.instructions li {
+    margin-bottom: 8px;
+}
+
+/* Code Display */
+.code-display {
+    margin: 20px 0;
+    min-height: 100px;
+}
+
+.code-received {
+    text-align: center;
+    padding: 20px;
+    background: #d4edda;
+    border-radius: 8px;
+}
+
+.code-received .icon {
+    font-size: 3rem;
+    color: var(--success);
+}
+
+.code-received .code-value {
+    font-size: 2.5rem;
+    font-weight: bold;
+    color: var(--success);
+    letter-spacing: 5px;
+    margin: 15px 0;
+    font-family: monospace;
+}
+
+.waiting {
+    text-align: center;
+    padding: 20px;
+    background: #fff3cd;
+    border-radius: 8px;
+}
+
+.waiting .icon {
+    font-size: 2rem;
+}
+
+/* Audit Log */
+.audit-log {
+    margin-top: 20px;
+}
+
+.audit-success,
+.audit-failed {
+    text-align: center;
+    padding: 30px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+.audit-success {
+    background: #d4edda;
+}
+
+.audit-success .icon {
+    font-size: 4rem;
+    color: var(--success);
+}
+
+.audit-failed {
+    background: #f8d7da;
+}
+
+.audit-failed .icon {
+    font-size: 4rem;
+    color: var(--danger);
+}
+
+.issues-list {
+    list-style: none;
+}
+
+.issue-item {
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    border-right: 4px solid;
+}
+
+.issue-item.severity-high {
+    background: #f8d7da;
+    border-color: var(--danger);
+}
+
+.issue-item.severity-medium {
+    background: #fff3cd;
+    border-color: var(--warning);
+}
+
+.issue-item.severity-low {
+    background: #d1ecf1;
+    border-color: var(--primary);
+}
+
+.issue-title {
+    font-weight: bold;
+    margin-bottom: 5px;
+}
+
+.issue-desc {
+    color: var(--text-light);
+    font-size: 0.9rem;
+}
+
+.issue-action {
+    margin-top: 10px;
+    font-size: 0.9rem;
+}
+
+/* Action Needed */
+.action-needed {
+    background: #fff3cd;
+    padding: 15px;
+    border-radius: 8px;
+    margin-top: 15px;
+    text-align: center;
+}
+
+/* Mode Info */
+.mode-info {
+    margin-top: 20px;
+    padding: 10px 15px;
+    background: #e7f3ff;
+    border-radius: 8px;
+    text-align: center;
+}
+
+/* Warning Box */
+.warning-box {
+    background: #fff3cd;
+    border: 1px solid #ffeeba;
+    padding: 15px;
+    border-radius: 8px;
+    margin: 20px 0;
+}
+
+.warning-box ul {
+    margin-top: 10px;
+    padding-right: 20px;
+}
+
+/* Complete View */
+.success-big {
+    text-align: center;
+    padding: 30px;
+}
+
+.success-big .icon {
+    font-size: 4rem;
+}
+
+.success-big h2 {
+    color: var(--success);
+    margin: 20px 0;
+}
+
+.credentials-box {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    margin: 20px 0;
+    text-align: right;
+}
+
+.credential {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.credential:last-child {
+    border-bottom: none;
+}
+
+.credential .label {
+    font-weight: 500;
+}
+
+.credential .value {
+    font-family: monospace;
+    direction: ltr;
+}
+
+.credential .value.password {
+    background: #ffe6e6;
+    padding: 5px 10px;
+    border-radius: 4px;
+}
+
+/* Loading */
+.loading {
+    text-align: center;
+    padding: 30px;
+    color: var(--text-light);
+}
+
+.loader {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid #f3f3f3;
+    border-top: 3px solid var(--primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-left: 10px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Footer */
+footer {
+    text-align: center;
+    padding: 30px;
+    color: var(--text-light);
+    font-size: 0.9rem;
+}
+
+footer a {
+    color: var(--primary);
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+    .steps {
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    
+    .step::after {
+        display: none;
+    }
+    
+    .step {
+        width: 30%;
+    }
+    
+    .card {
+        padding: 20px;
+    }
+    
+    header h1 {
+        font-size: 1.5rem;
+    }
+}
+
+/* Email OK */
+.email-ok {
+    color: var(--success);
+    font-weight: bold;
+    margin-top: 10px;
+}
+
+/* Health Check */
+.health-check {
+    text-align: right;
+}
+
+.health-check p {
+    margin: 5px 0;
+}

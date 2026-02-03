@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+escrow_accounts.db
+
+# Sessions
+sessions/
+*.session
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Credentials (IMPORTANT - never commit)
+credentials.json
+credentials.log
+hash_mappings.json
+
+# TDLib binaries (download separately)
+tdlib/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.temp
+attempts_log.md
+
+# Node modules (if any frontend build)
+node_modules/
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*

