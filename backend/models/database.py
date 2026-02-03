@@ -28,6 +28,7 @@ class AuthStatus(enum.Enum):
     FINALIZING = "finalizing"
     COMPLETED = "completed"
     FAILED = "failed"
+    EXPIRED = "expired"  # Session timed out (30 min limit)
 
 
 class DeliveryStatus(enum.Enum):

