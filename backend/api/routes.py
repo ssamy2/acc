@@ -133,14 +133,17 @@ async def init_auth(request: InitAuthRequest, req: Request):
         manager = get_pyrogram()
         result = await manager.send_code(phone)
         
-        if result["status"] == "success":
+        logger.info(f"send_code result: {result}")
+        
+        # Check for success statuses: "code_sent" or "already_logged_in"
+        if result["status"] in ["code_sent", "already_logged_in", "success"]:
             await update_account(phone, status=AuthStatus.PENDING_CODE)
             await log_auth_action(phone, "init_auth", "success")
             
             duration = time.time() - start_time
             response = {
-                "status": "code_sent",
-                "message": "Verification code sent to Telegram",
+                "status": result["status"],
+                "message": "Verification code sent to Telegram" if result["status"] == "code_sent" else "Already logged in",
                 "phone_code_hash": result.get("phone_code_hash"),
                 "transfer_mode": request.transfer_mode,
                 "duration": duration
@@ -148,8 +151,9 @@ async def init_auth(request: InitAuthRequest, req: Request):
             log_response(logger, 200, response)
             return response
         else:
+            logger.error(f"init_auth failed: {result}")
             await log_auth_action(phone, "init_auth", "failed", result.get("error"))
-            raise HTTPException(status_code=400, detail=result.get("error"))
+            raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
             
     except HTTPException:
         raise
