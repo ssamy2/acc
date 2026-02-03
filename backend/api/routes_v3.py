@@ -745,6 +745,44 @@ async def regenerate_sessions(account_id: str):
     }
 
 
+# ============== Accounts List (for receiving) ==============
+
+@router.get("/accounts/ready")
+async def get_ready_accounts():
+    """
+    Get all accounts that are ready for delivery (for buyer/receiver)
+    """
+    from backend.models.database import async_session, Account
+    from sqlalchemy import select
+    
+    async with async_session() as session:
+        # Get accounts that have been finalized
+        result = await session.execute(
+            select(Account).where(
+                Account.pyrogram_session.isnot(None),
+                Account.generated_password.isnot(None)
+            )
+        )
+        accounts = result.scalars().all()
+        
+        accounts_list = []
+        for acc in accounts:
+            accounts_list.append({
+                "phone": acc.phone,
+                "telegram_id": acc.telegram_id,
+                "transfer_mode": acc.transfer_mode or "bot_only",
+                "status": "ready" if acc.pyrogram_session else "pending",
+                "delivery_count": acc.delivery_count or 0,
+                "email_changed": acc.email_changed or False
+            })
+        
+        return {
+            "status": "success",
+            "accounts": accounts_list,
+            "count": len(accounts_list)
+        }
+
+
 # ============== Delivery Endpoints ==============
 
 @router.post("/delivery/request-code/{account_id}")

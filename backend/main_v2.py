@@ -68,6 +68,10 @@ async def root():
 async def dashboard():
     return FileResponse("frontend/dashboard.html")
 
+@app.get("/receive")
+async def receive_page():
+    return FileResponse("frontend/receive.html")
+
 app.mount("/", StaticFiles(directory="frontend", html=True), name="static")
 
 

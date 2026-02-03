@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>استلام الحسابات - Telegram Escrow</title>
+    <link rel="stylesheet" href="style_v3.css">
+    <style>
+        .receive-container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        .account-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .account-card h3 {
+            color: #0088cc;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .account-info {
+            display: grid;
+            gap: 12px;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        .info-row .label {
+            font-weight: 500;
+            color: #666;
+        }
+        .info-row .value {
+            font-family: monospace;
+            direction: ltr;
+            color: #333;
+        }
+        .info-row .value.password {
+            background: #ffe6e6;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .copy-btn {
+            background: #0088cc;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        .copy-btn:hover {
+            background: #006699;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+        .status-ready {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status-pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .delivery-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+        .step-box {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+        .step-box h4 {
+            color: #0088cc;
+            margin-bottom: 10px;
+        }
+        .step-box ol {
+            padding-right: 20px;
+            margin: 0;
+        }
+        .step-box li {
+            margin-bottom: 8px;
+        }
+        .code-input-group {
+            display: flex;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .code-input-group input {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 1.2rem;
+            text-align: center;
+            letter-spacing: 5px;
+        }
+        .timer {
+            text-align: center;
+            font-size: 1.5rem;
+            color: #dc3545;
+            margin: 15px 0;
+        }
+        .success-animation {
+            text-align: center;
+            padding: 30px;
+        }
+        .success-animation .icon {
+            font-size: 4rem;
+            animation: bounce 0.5s ease;
+        }
+        @keyframes bounce {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        .no-accounts {
+            text-align: center;
+            padding: 50px;
+            color: #666;
+        }
+        .no-accounts .icon {
+            font-size: 4rem;
+            opacity: 0.5;
+        }
+        .refresh-btn {
+            background: transparent;
+            border: 1px solid #0088cc;
+            color: #0088cc;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container receive-container">
+        <header>
+            <h1>📥 استلام الحسابات</h1>
+            <p class="subtitle">صفحة المشتري لاستلام الحسابات</p>
+        </header>
+
+        <!-- Status Message -->
+        <div id="status-message" class="status-box hidden"></div>
+
+        <!-- Loading -->
+        <div id="loading-view" class="card">
+            <div class="loading">
+                <span class="loader"></span>
+                جاري تحميل الحسابات المتاحة...
+            </div>
+        </div>
+
+        <!-- No Accounts -->
+        <div id="no-accounts-view" class="card hidden">
+            <div class="no-accounts">
+                <div class="icon">📭</div>
+                <h3>لا توجد حسابات متاحة للاستلام</h3>
+                <p>لم يتم العثور على حسابات جاهزة للتسليم</p>
+                <button onclick="loadAccounts()" class="refresh-btn">🔄 تحديث</button>
+            </div>
+        </div>
+
+        <!-- Accounts List -->
+        <div id="accounts-view" class="hidden">
+            <div id="accounts-list"></div>
+        </div>
+
+        <!-- Delivery Process -->
+        <div id="delivery-view" class="card hidden">
+            <h2>📦 عملية الاستلام</h2>
+            <div id="delivery-phone"></div>
+            
+            <div class="step-box">
+                <h4>خطوات الاستلام:</h4>
+                <ol>
+                    <li>اضغط على "طلب كود الدخول"</li>
+                    <li>سيتم إرسال كود إلى التيليجرام المرتبط بالحساب</li>
+                    <li>أدخل الكود هنا للتأكيد</li>
+                    <li>بعد التأكيد ستحصل على بيانات الدخول الكاملة</li>
+                </ol>
+            </div>
+
+            <div id="delivery-step-1">
+                <button id="btn-request-code" onclick="requestDeliveryCode()" class="btn-primary">
+                    📨 طلب كود الدخول
+                </button>
+            </div>
+
+            <div id="delivery-step-2" class="hidden">
+                <p>تم إرسال كود التحقق! أدخله هنا:</p>
+                <div class="code-input-group">
+                    <input type="text" id="delivery-code-input" placeholder="12345" maxlength="6">
+                    <button onclick="verifyDeliveryCode()" class="btn-success">تأكيد</button>
+                </div>
+                <div id="timer" class="timer"></div>
+                <p class="hint">إذا لم يصل الكود، سيتم جلبه تلقائياً من الإيميل</p>
+            </div>
+
+            <div id="delivery-step-3" class="hidden">
+                <div class="success-animation">
+                    <div class="icon">🎉</div>
+                    <h3>تم الاستلام بنجاح!</h3>
+                </div>
+                <div id="final-credentials"></div>
+            </div>
+
+            <button onclick="backToList()" class="btn-secondary" style="margin-top: 20px;">
+                ← العودة للقائمة
+            </button>
+        </div>
+
+        <footer>
+            <p>Telegram Escrow - نظام استلام الحسابات الآمن</p>
+            <p><a href="/">العودة للصفحة الرئيسية</a></p>
+        </footer>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin + "/api/v1";
+        let currentAccount = null;
+        let countdownInterval = null;
+
+        async function apiCall(endpoint, method = 'GET', data = null) {
+            const options = {
+                method,
+                headers: { 'Content-Type': 'application/json' }
+            };
+            if (data) options.body = JSON.stringify(data);
+            
+            const response = await fetch(`${API_URL}${endpoint}`, options);
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.detail || 'Unknown error');
+            return result;
+        }
+
+        function showStatus(message, type = 'info') {
+            const el = document.getElementById('status-message');
+            el.className = `status-box ${type}`;
+            el.innerHTML = message;
+            el.classList.remove('hidden');
+        }
+
+        function hideStatus() {
+            document.getElementById('status-message').classList.add('hidden');
+        }
+
+        function showView(viewId) {
+            ['loading-view', 'no-accounts-view', 'accounts-view', 'delivery-view'].forEach(id => {
+                document.getElementById(id).classList.add('hidden');
+            });
+            document.getElementById(viewId).classList.remove('hidden');
+        }
+
+        async function loadAccounts() {
+            showView('loading-view');
+            hideStatus();
+            
+            try {
+                // Get all accounts that are ready for delivery
+                const result = await apiCall('/accounts/ready');
+                
+                if (!result.accounts || result.accounts.length === 0) {
+                    showView('no-accounts-view');
+                    return;
+                }
+
+                renderAccounts(result.accounts);
+                showView('accounts-view');
+                
+            } catch (error) {
+                // If endpoint doesn't exist, show demo data for testing
+                console.log('Using demo data:', error.message);
+                showView('no-accounts-view');
+            }
+        }
+
+        function renderAccounts(accounts) {
+            const container = document.getElementById('accounts-list');
+            container.innerHTML = accounts.map(acc => `
+                <div class="account-card">
+                    <h3>📱 ${acc.phone}</h3>
+                    <div class="account-info">
+                        <div class="info-row">
+                            <span class="label">Telegram ID:</span>
+                            <span class="value">${acc.telegram_id || 'N/A'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="label">الحالة:</span>
+                            <span class="status-badge ${acc.status === 'ready' ? 'status-ready' : 'status-pending'}">
+                                ${acc.status === 'ready' ? 'جاهز للاستلام' : 'قيد المعالجة'}
+                            </span>
+                        </div>
+                        <div class="info-row">
+                            <span class="label">وضع التحويل:</span>
+                            <span class="value">${acc.transfer_mode === 'bot_only' ? 'كامل (البوت فقط)' : 'مشترك'}</span>
+                        </div>
+                    </div>
+                    <button onclick="startDelivery('${acc.phone}')" class="btn-primary" style="margin-top: 15px;">
+                        📥 استلام الحساب
+                    </button>
+                </div>
+            `).join('');
+        }
+
+        function startDelivery(phone) {
+            currentAccount = { phone };
+            document.getElementById('delivery-phone').innerHTML = `
+                <div class="info-row">
+                    <span class="label">رقم الهاتف:</span>
+                    <span class="value">${phone}</span>
+                </div>
+            `;
+            
+            // Reset steps
+            document.getElementById('delivery-step-1').classList.remove('hidden');
+            document.getElementById('delivery-step-2').classList.add('hidden');
+            document.getElementById('delivery-step-3').classList.add('hidden');
+            
+            showView('delivery-view');
+        }
+
+        async function requestDeliveryCode() {
+            const btn = document.getElementById('btn-request-code');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loader"></span> جاري الإرسال...';
+            
+            try {
+                const result = await apiCall(`/delivery/request-code/${encodeURIComponent(currentAccount.phone)}`, 'POST');
+                
+                if (result.status === 'success') {
+                    currentAccount.password = result.two_fa_password;
+                    
+                    document.getElementById('delivery-step-1').classList.add('hidden');
+                    document.getElementById('delivery-step-2').classList.remove('hidden');
+                    
+                    // Start 20 second countdown
+                    startCountdown(result.fallback_seconds || 20);
+                    
+                    showStatus('تم إرسال كود التحقق! أدخله أو انتظر الجلب التلقائي', 'success');
+                }
+                
+            } catch (error) {
+                showStatus(`خطأ: ${error.message}`, 'error');
+                btn.disabled = false;
+                btn.innerHTML = '📨 طلب كود الدخول';
+            }
+        }
+
+        function startCountdown(seconds) {
+            let remaining = seconds;
+            const timerEl = document.getElementById('timer');
+            
+            countdownInterval = setInterval(() => {
+                timerEl.textContent = `⏱️ ${remaining} ثانية`;
+                remaining--;
+                
+                if (remaining < 0) {
+                    clearInterval(countdownInterval);
+                    timerEl.textContent = 'جاري جلب الكود تلقائياً...';
+                    autoFetchCode();
+                }
+            }, 1000);
+        }
+
+        async function autoFetchCode() {
+            try {
+                // Try to get code from webhook
+                const result = await apiCall(`/email/code/${encodeURIComponent(currentAccount.phone)}?wait_seconds=5`);
+                
+                if (result.status === 'received' && result.code) {
+                    document.getElementById('delivery-code-input').value = result.code;
+                    showStatus('تم جلب الكود تلقائياً!', 'success');
+                    verifyDeliveryCode();
+                } else {
+                    showStatus('لم يتم استلام الكود. حاول مرة أخرى.', 'warning');
+                }
+            } catch (error) {
+                showStatus(`خطأ في جلب الكود: ${error.message}`, 'error');
+            }
+        }
+
+        async function verifyDeliveryCode() {
+            const code = document.getElementById('delivery-code-input').value.trim();
+            
+            if (!code) {
+                showStatus('الرجاء إدخال الكود', 'error');
+                return;
+            }
+            
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+            }
+            
+            try {
+                const result = await apiCall(`/delivery/confirm/${encodeURIComponent(currentAccount.phone)}`, 'POST', {
+                    received: true,
+                    code: code
+                });
+                
+                if (result.status === 'success') {
+                    document.getElementById('delivery-step-2').classList.add('hidden');
+                    document.getElementById('delivery-step-3').classList.remove('hidden');
+                    
+                    document.getElementById('final-credentials').innerHTML = `
+                        <div class="account-info">
+                            <div class="info-row">
+                                <span class="label">رقم الهاتف:</span>
+                                <span class="value">${currentAccount.phone}</span>
+                                <button class="copy-btn" onclick="copyText('${currentAccount.phone}')">📋</button>
+                            </div>
+                            <div class="info-row">
+                                <span class="label">كلمة مرور 2FA:</span>
+                                <span class="value password">${currentAccount.password || result.password || 'N/A'}</span>
+                                <button class="copy-btn" onclick="copyText('${currentAccount.password || result.password}')">📋</button>
+                            </div>
+                            <div class="info-row">
+                                <span class="label">رقم الاستلام:</span>
+                                <span class="value">#${result.delivery_number || 1}</span>
+                            </div>
+                        </div>
+                        <p style="margin-top: 15px; text-align: center; color: #28a745;">
+                            ✅ تم تسجيل الاستلام بنجاح!
+                        </p>
+                    `;
+                    
+                    showStatus('تم الاستلام بنجاح!', 'success');
+                }
+                
+            } catch (error) {
+                showStatus(`خطأ: ${error.message}`, 'error');
+            }
+        }
+
+        function copyText(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                showStatus('تم النسخ!', 'success');
+                setTimeout(hideStatus, 2000);
+            });
+        }
+
+        function backToList() {
+            if (countdownInterval) clearInterval(countdownInterval);
+            currentAccount = null;
+            loadAccounts();
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', loadAccounts);
+    </script>
+</body>
+</html>

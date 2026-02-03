@@ -3,7 +3,8 @@
  * Supports new unified API with email management and transfer modes
  */
 
-const API_URL = "http://localhost:8001/api/v1";
+// Auto-detect API URL based on current location
+const API_URL = window.location.origin + "/api/v1";
 
 let appState = {
     phone: null,
