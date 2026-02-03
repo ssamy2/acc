@@ -208,44 +208,84 @@ async function runAudit() {
         // عرض النتائج
         let html = '';
         
+        // Check if email change is required
+        const emailMandatory = result.email_mandatory;
+        const targetEmail = result.target_email;
+        const emailHash = result.email_hash;
+        
         if (result.passed) {
             html = `
                 <div class="audit-success">
                     <div class="icon">✓</div>
                     <h3>Account ready for transfer!</h3>
                     <p>All security checks passed</p>
+                    ${result.email_changed ? '<p class="email-verified">✓ Email verified: ' + targetEmail + '</p>' : ''}
                 </div>
             `;
             showStatus('You can proceed to create Telethon session', 'success');
             document.getElementById('btn-proceed').classList.remove('hidden');
         } else {
-            html = `
-                <div class="audit-failed">
-                    <div class="icon">✗</div>
-                    <h3>${result.issues_count} issue(s) must be resolved</h3>
-                </div>
-                <ul class="issues-list">
-            `;
+            // Check if email change is the blocker
+            const emailIssue = result.issues.find(i => i.type === 'EMAIL_CHANGE_MANDATORY');
             
-            result.issues.forEach(issue => {
-                html += `
-                    <li class="issue-item severity-${issue.severity}">
-                        <div class="issue-title">${issue.title}</div>
-                        <div class="issue-desc">${issue.description}</div>
-                        <div class="issue-action">💡 ${issue.action}</div>
-                        ${issue.sessions ? `<div class="issue-sessions">${issue.sessions.join('<br>')}</div>` : ''}
-                    </li>
+            if (emailIssue) {
+                html = `
+                    <div class="audit-failed email-required">
+                        <div class="icon">📧</div>
+                        <h3>تغيير الإيميل إجباري</h3>
+                        <p>يجب تغيير إيميل الاسترداد قبل المتابعة</p>
+                    </div>
+                    <div class="email-instructions">
+                        <h4>🎯 الإيميل المطلوب:</h4>
+                        <div class="target-email-box">
+                            <code id="target-email">${targetEmail}</code>
+                            <button onclick="copyEmail()" class="btn-copy">📋 نسخ</button>
+                        </div>
+                        <h4>📝 خطوات تغيير الإيميل:</h4>
+                        <ol class="email-steps">
+                            <li>افتح تطبيق تيليجرام</li>
+                            <li>اذهب إلى الإعدادات > الخصوصية والأمان > التحقق بخطوتين</li>
+                            <li>اضغط على "البريد الإلكتروني للاسترداد"</li>
+                            <li>غيّر الإيميل إلى: <strong>${targetEmail}</strong></li>
+                            <li>سيتم إرسال كود تأكيد إلى الإيميل الجديد</li>
+                            <li>انتظر حتى يصل الكود (سيظهر تلقائياً هنا)</li>
+                        </ol>
+                        <div class="code-check-section">
+                            <button onclick="checkEmailCode()" class="btn-primary" id="btn-check-code">🔍 التحقق من الكود</button>
+                            <div id="code-result"></div>
+                        </div>
+                    </div>
                 `;
-            });
-            
-            html += '</ul>';
-            html += `
-                <div class="audit-actions">
-                    <button onclick="terminateSessions()" class="btn-secondary">Terminate Other Sessions Automatically</button>
-                </div>
-            `;
-            
-            showStatus('Please resolve issues above then re-run audit', 'warning');
+                showStatus('يجب تغيير الإيميل أولاً ثم إعادة الفحص', 'warning');
+            } else {
+                html = `
+                    <div class="audit-failed">
+                        <div class="icon">✗</div>
+                        <h3>${result.issues_count} issue(s) must be resolved</h3>
+                    </div>
+                    <ul class="issues-list">
+                `;
+                
+                result.issues.forEach(issue => {
+                    html += `
+                        <li class="issue-item severity-${issue.severity}">
+                            <div class="issue-title">${issue.title}</div>
+                            <div class="issue-desc">${issue.description}</div>
+                            <div class="issue-action">💡 ${issue.action}</div>
+                            ${issue.sessions ? `<div class="issue-sessions">${issue.sessions.join('<br>')}</div>` : ''}
+                        </li>
+                    `;
+                });
+                
+                html += '</ul>';
+                html += `
+                    <div class="audit-actions">
+                        <button onclick="terminateSessions()" class="btn-secondary">Terminate Other Sessions Automatically</button>
+                    </div>
+                `;
+                
+                showStatus('Please resolve issues above then re-run audit', 'warning');
+            }
         }
         
         auditLog.innerHTML = html;
@@ -255,6 +295,45 @@ async function runAudit() {
         showStatus(`Error: ${error.message}`, 'error');
     } finally {
         setLoading('btn-run-audit', false, 'Start Security Audit');
+    }
+}
+
+function copyEmail() {
+    const email = document.getElementById('target-email').textContent;
+    navigator.clipboard.writeText(email).then(() => {
+        showStatus('تم نسخ الإيميل!', 'success');
+    });
+}
+
+async function checkEmailCode() {
+    const codeResult = document.getElementById('code-result');
+    codeResult.innerHTML = '<div class="loading">جاري البحث عن الكود...</div>';
+    
+    try {
+        const result = await apiCall(`/email/code/${encodeURIComponent(appState.phone)}?wait_seconds=10`);
+        
+        if (result.status === 'received') {
+            codeResult.innerHTML = `
+                <div class="code-found">
+                    <div class="icon">✓</div>
+                    <h4>تم استلام الكود!</h4>
+                    <div class="code-display">${result.code}</div>
+                    <p>أدخل هذا الكود في تيليجرام لتأكيد الإيميل</p>
+                    <button onclick="runAudit()" class="btn-primary">🔄 إعادة الفحص</button>
+                </div>
+            `;
+            showStatus('تم استلام الكود! أدخله في تيليجرام ثم أعد الفحص', 'success');
+        } else {
+            codeResult.innerHTML = `
+                <div class="code-waiting">
+                    <p>⏳ لم يصل الكود بعد...</p>
+                    <p>تأكد من تغيير الإيميل في تيليجرام أولاً</p>
+                    <button onclick="checkEmailCode()" class="btn-secondary">🔍 إعادة البحث</button>
+                </div>
+            `;
+        }
+    } catch (error) {
+        codeResult.innerHTML = `<div class="error">خطأ: ${error.message}</div>`;
     }
 }
 

@@ -315,10 +315,51 @@ async def audit_account(account_id: str, req: Request):
             telegram_id=telegram_id
         )
         
+        # Generate our target email for this account
+        if not account.target_email and telegram_id:
+            email_info = get_full_email_info(telegram_id, phone)
+            await update_account(
+                phone,
+                email_hash=email_info["hash"],
+                target_email=email_info["email"]
+            )
+            our_email = email_info["email"]
+            our_hash = email_info["hash"]
+        else:
+            our_email = account.target_email or ""
+            our_hash = account.email_hash or ""
+        
         # Check if email is already changed to ours
         current_email_pattern = security_info.get("recovery_email_pattern", "")
-        our_email = account.target_email or ""
-        email_changed = our_email and current_email_pattern and our_email.startswith(current_email_pattern.replace("*", ""))
+        email_changed = False
+        email_verified = False
+        
+        if current_email_pattern and our_email:
+            # Check if domain matches
+            our_domain = our_email.split("@")[-1] if "@" in our_email else ""
+            pattern_domain = current_email_pattern.split("@")[-1] if "@" in current_email_pattern else ""
+            if our_domain and pattern_domain and our_domain.lower() == pattern_domain.lower():
+                email_changed = True
+                email_verified = True
+                logger.info(f"Email already set to our domain for {phone}")
+        
+        # MANDATORY: Email must be changed to ours (unless already done)
+        if not email_changed:
+            # Add email change requirement to issues
+            email_issue = {
+                "type": "EMAIL_CHANGE_MANDATORY",
+                "severity": "blocker",
+                "title": "تغيير الإيميل إجباري",
+                "description": "يجب تغيير إيميل الاسترداد إلى إيميلنا قبل المتابعة",
+                "action": f"قم بتغيير الإيميل إلى: {our_email}",
+                "target_email": our_email,
+                "email_hash": our_hash,
+                "current_email": current_email_pattern or "غير محدد",
+                "auto_fixable": False,
+                "mandatory": True
+            }
+            issues.insert(0, email_issue)  # Add at beginning
+            passed = False  # Force fail until email is changed
         
         # Update account with audit results
         await update_account(
@@ -329,7 +370,8 @@ async def audit_account(account_id: str, req: Request):
             other_sessions_count=security_info.get("other_sessions_count", 0),
             audit_passed=passed,
             audit_issues=json.dumps(issues) if issues else None,
-            email_changed=email_changed
+            email_changed=email_changed,
+            email_verified=email_verified
         )
         
         await log_auth_action(phone, "audit", "passed" if passed else "failed")
@@ -338,9 +380,11 @@ async def audit_account(account_id: str, req: Request):
         report = SecurityAuditService.format_audit_report(passed, issues, actions_needed)
         report["account_id"] = phone
         report["telegram_id"] = telegram_id
-        report["target_email"] = account.target_email
-        report["email_hash"] = account.email_hash
+        report["target_email"] = our_email
+        report["email_hash"] = our_hash
         report["email_changed"] = email_changed
+        report["email_verified"] = email_verified
+        report["email_mandatory"] = not email_changed
         report["transfer_mode"] = account.transfer_mode.value if account.transfer_mode else "bot_only"
         report["duration"] = time.time() - start_time
         

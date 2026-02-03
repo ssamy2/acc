@@ -160,7 +160,22 @@ class PyrogramSessionManager:
         
         client = self.active_clients.get(phone)
         if not client:
-            return {"status": "error", "error": "Session not found."}
+            # Try to reconnect using existing session
+            session_path = self._get_session_path(phone)
+            client = Client(
+                session_path,
+                api_id=self.api_id,
+                api_hash=self.api_hash,
+                phone_number=phone
+            )
+            try:
+                await client.connect()
+                if not await client.get_me():
+                    return {"status": "error", "error": "Session expired. Please re-authenticate."}
+                self.active_clients[phone] = client
+            except Exception as e:
+                logger.error(f"Failed to reconnect session for {phone}: {e}")
+                return {"status": "error", "error": "Session not found. Please re-authenticate."}
         
         try:
             authorizations = await client.invoke(functions.account.GetAuthorizations())
