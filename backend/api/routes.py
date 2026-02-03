@@ -777,7 +777,7 @@ async def get_ready_accounts():
             accounts_list.append({
                 "phone": acc.phone,
                 "telegram_id": acc.telegram_id,
-                "transfer_mode": acc.transfer_mode or "bot_only",
+                "transfer_mode": acc.transfer_mode.value if acc.transfer_mode else "bot_only",
                 "status": "ready" if acc.pyrogram_session else "pending",
                 "delivery_count": acc.delivery_count or 0,
                 "email_changed": acc.email_changed or False
