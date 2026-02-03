@@ -59,12 +59,15 @@ class TransferService:
         return ''.join(secrets.choice(alphabet) for _ in range(length))
     
     def generate_our_email(self, telegram_id: int) -> str:
-        """Generate email address for this account"""
-        return f"email-for-S{telegram_id}@{OUR_EMAIL_DOMAIN}"
+        """Generate email address for this account using encrypted hash"""
+        from backend.core_engine.credentials_logger import get_full_email_info
+        email_info = get_full_email_info(telegram_id)
+        return email_info["email"]
     
     def get_email_hash(self, telegram_id: int) -> str:
         """Get the hash portion of the email for webhook matching"""
-        return f"S{telegram_id}"
+        from backend.core_engine.credentials_logger import get_email_hash as get_hash
+        return get_hash(telegram_id)
     
     async def initiate_transfer(
         self,

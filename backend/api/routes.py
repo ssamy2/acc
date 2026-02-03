@@ -330,18 +330,32 @@ async def audit_account(account_id: str, req: Request):
             our_hash = account.email_hash or ""
         
         # Check if email is already changed to ours
-        current_email_pattern = security_info.get("recovery_email_pattern", "")
+        # Telegram returns email patterns in these fields:
+        # - email_unconfirmed_pattern: when email is set but not yet confirmed
+        # - has_recovery: True when email is confirmed (but pattern is hidden for security)
+        email_unconfirmed = security_info.get("email_unconfirmed_pattern", "")
+        has_recovery = security_info.get("has_recovery_email", False)
+        
         email_changed = False
         email_verified = False
+        current_email_pattern = email_unconfirmed or ""
         
-        if current_email_pattern and our_email:
-            # Check if domain matches
+        # Check unconfirmed email pattern
+        if email_unconfirmed and our_email:
             our_domain = our_email.split("@")[-1] if "@" in our_email else ""
-            pattern_domain = current_email_pattern.split("@")[-1] if "@" in current_email_pattern else ""
-            if our_domain and pattern_domain and our_domain.lower() == pattern_domain.lower():
+            pattern_domain = email_unconfirmed.split("@")[-1] if "@" in email_unconfirmed else ""
+            # Check if pattern matches our email (e.g., "e]**[@channelsseller.site" matches our domain)
+            if our_domain and our_domain.lower() in email_unconfirmed.lower():
                 email_changed = True
-                email_verified = True
-                logger.info(f"Email already set to our domain for {phone}")
+                email_verified = False  # Not yet confirmed
+                logger.info(f"Email set to our domain (unconfirmed) for {phone}: {email_unconfirmed}")
+        
+        # If has_recovery is True and no unconfirmed pattern, email is confirmed
+        # We need to trust that if has_recovery=True and we previously set it, it's ours
+        if has_recovery and not email_unconfirmed and account.email_changed:
+            email_changed = True
+            email_verified = True
+            logger.info(f"Email already confirmed for {phone}")
         
         # MANDATORY: Email must be changed to ours (unless already done)
         if not email_changed:

@@ -10,6 +10,7 @@ Two Modes Available:
 from typing import Dict, List, Tuple, Any
 from enum import Enum
 from backend.core_engine.logger import get_logger, log_audit
+from backend.core_engine.credentials_logger import get_full_email_info
 
 logger = get_logger("SecurityAudit")
 
@@ -54,10 +55,13 @@ class SecurityAuditService:
             "mode": mode.value
         }
         
-        # Generate our email address for this account
+        # Generate our email address for this account using encrypted hash
         if telegram_id:
-            our_email = f"email-for-S{telegram_id}@{OUR_EMAIL_DOMAIN}"
+            email_info = get_full_email_info(telegram_id)
+            our_email = email_info["email"]
+            our_hash = email_info["hash"]
             actions_needed["our_email"] = our_email
+            actions_needed["email_hash"] = our_hash
         
         # ========== 2FA Check ==========
         has_password = security_info.get("has_password", False)
