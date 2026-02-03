@@ -173,9 +173,9 @@ async def verify_auth(request: VerifyAuthRequest, req: Request):
         
         # If code provided, verify code
         if request.code:
-            result = await manager.sign_in(phone, request.code)
+            result = await manager.verify_code(phone, request.code)
             
-            if result["status"] == "success":
+            if result["status"] == "logged_in":
                 # Get user info
                 user_info = await manager.get_me_info(phone)
                 telegram_id = user_info.get("id") if user_info.get("status") == "success" else None
@@ -217,9 +217,9 @@ async def verify_auth(request: VerifyAuthRequest, req: Request):
         
         # If password provided, verify 2FA
         elif request.password:
-            result = await manager.check_password(phone, request.password)
+            result = await manager.verify_2fa(phone, request.password)
             
-            if result["status"] == "success":
+            if result["status"] == "logged_in":
                 user_info = await manager.get_me_info(phone)
                 telegram_id = user_info.get("id") if user_info.get("status") == "success" else None
                 

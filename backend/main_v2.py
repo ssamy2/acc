@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 
-from backend.api.routes_v3 import router as v3_router
+from backend.api.routes import router as api_router
 from backend.api.webhook_routes import router as webhook_router
 from backend.models.database import init_db
 from backend.core_engine.logger import get_logger
@@ -73,12 +73,12 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
-app.include_router(v3_router)
+app.include_router(api_router)
 app.include_router(webhook_router)
 
 @app.get("/")
 async def root():
-    return FileResponse("frontend/index_v3.html")
+    return FileResponse("frontend/index_main.html")
 
 @app.get("/dashboard")
 async def dashboard():
