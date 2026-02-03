@@ -23,6 +23,15 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Escrow Account Manager...")
     logger.info("=" * 50)
     
+    # Run database migration first
+    try:
+        from migrate_all_columns import add_missing_columns
+        logger.info("Running database migration...")
+        add_missing_columns()
+        logger.info("Migration completed")
+    except Exception as e:
+        logger.warning(f"Migration warning: {e}")
+    
     await init_db()
     logger.info("Database initialized")
     
