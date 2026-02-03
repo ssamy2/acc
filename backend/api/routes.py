@@ -26,7 +26,7 @@ import secrets
 import string
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Dict
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
