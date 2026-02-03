@@ -23,6 +23,7 @@ REQUIRED_COLUMNS = {
     "delivery_count": "INTEGER DEFAULT 0",
     "pyrogram_healthy": "BOOLEAN DEFAULT 1",
     "telethon_healthy": "BOOLEAN DEFAULT 1",
+    "last_session_check": "DATETIME",
     "has_delete_request": "BOOLEAN DEFAULT 0",
     "pyrogram_session": "TEXT",
     "telethon_session": "TEXT",

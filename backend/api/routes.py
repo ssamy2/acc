@@ -115,8 +115,11 @@ async def init_auth(request: InitAuthRequest, req: Request):
     log_request(logger, "POST", "/auth/init", {"phone": phone})
     
     try:
-        # Determine transfer mode
-        transfer_mode = DBTransferMode.BOT_ONLY if request.transfer_mode == "bot_only" else DBTransferMode.USER_KEEPS_SESSION
+        # Determine transfer mode - convert string to enum value
+        if request.transfer_mode == "bot_only":
+            transfer_mode = "BOT_ONLY"
+        else:
+            transfer_mode = "USER_KEEPS_SESSION"
         
         # Check existing account
         account = await get_account(phone)
