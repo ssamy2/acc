@@ -391,7 +391,9 @@
                 'pending_code': 'pending',
                 'pending_2fa': 'pending',
                 'expired': 'expired',
-                'delivered': 'delivered'
+                'delivered': 'delivered',
+                'buyer_delivered': 'delivered',
+                'bot_received': 'ready'
             };
             return map[status] || 'pending';
         }
@@ -404,7 +406,10 @@
                 'pending_2fa': 'بانتظار 2FA',
                 'expired': 'منتهي',
                 'audit_passed': 'اجتاز الفحص',
-                'audit_failed': 'فشل الفحص'
+                'audit_failed': 'فشل الفحص',
+                'bot_received': 'استلمه البوت',
+                'buyer_delivered': 'تم تسليمه للمشتري',
+                'ready': 'جاهز'
             };
             return map[status] || status;
         }
@@ -471,6 +476,13 @@
                         <span class="label">تاريخ الإكمال:</span>
                         <span class="value">${acc.completed_at ? new Date(acc.completed_at).toLocaleString('ar-EG') : '-'}</span>
                     </div>
+                    <hr style="margin: 15px 0;">
+                    <h4 style="margin-bottom: 10px;">🔧 إصلاح الحساب:</h4>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <button class="action-btn" style="background: #ffc107; color: #000;" onclick="fixAccount('${acc.phone}', 'reset_delivery')">إعادة تعيين التسليمات</button>
+                        <button class="action-btn" style="background: #28a745; color: #fff;" onclick="fixAccount('${acc.phone}', 'set_completed')">تعيين مكتمل</button>
+                        <button class="action-btn" style="background: #17a2b8; color: #fff;" onclick="fixAccount('${acc.phone}', 'set_bot_received')">تعيين استلمه البوت</button>
+                    </div>
                 `;
                 
                 document.getElementById('account-modal').classList.add('active');
@@ -482,6 +494,31 @@
 
         function closeModal() {
             document.getElementById('account-modal').classList.remove('active');
+        }
+
+        async function fixAccount(phone, action) {
+            let requestData = {};
+            
+            switch(action) {
+                case 'reset_delivery':
+                    requestData = { reset_delivery_count: true };
+                    break;
+                case 'set_completed':
+                    requestData = { set_status: 'completed', set_has_2fa: true, set_audit_passed: true };
+                    break;
+                case 'set_bot_received':
+                    requestData = { set_delivery_status: 'bot_received' };
+                    break;
+            }
+            
+            try {
+                const result = await apiCall(`/admin/account/${encodeURIComponent(phone)}/fix`, 'POST', requestData);
+                showStatus(`تم الإصلاح: ${JSON.stringify(result.updates)}`, 'success');
+                closeModal();
+                loadDashboard();
+            } catch (error) {
+                showStatus(`خطأ: ${error.message}`, 'error');
+            }
         }
 
         function startDelivery(phone) {

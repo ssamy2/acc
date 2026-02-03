@@ -32,10 +32,12 @@ class AuthStatus(enum.Enum):
 
 
 class DeliveryStatus(enum.Enum):
-    READY = "ready"
+    BOT_RECEIVED = "bot_received"  # Bot received account from seller (after finalize)
+    READY = "ready"  # Ready for buyer to receive
     WAITING_CODE = "waiting_code"
     CODE_SENT = "code_sent"
-    DELIVERED = "delivered"
+    BUYER_DELIVERED = "buyer_delivered"  # Delivered to buyer via /receive
+    DELIVERED = "delivered"  # Legacy - same as buyer_delivered
     FORCE_SECURED = "force_secured"
     EXPIRED = "expired"
 

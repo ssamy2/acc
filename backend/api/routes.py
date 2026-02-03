@@ -628,6 +628,7 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         
         # Update account
         # Note: export_session_string returns string directly, not dict
+        # Use BOT_RECEIVED status - account received by bot from seller, ready for buyer
         await update_account(
             phone,
             status=AuthStatus.COMPLETED,
@@ -635,7 +636,8 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             pyrogram_session=pyrogram_session if isinstance(pyrogram_session, str) else None,
             telethon_session=telethon_session,
             completed_at=datetime.utcnow(),
-            delivery_status=DeliveryStatus.READY
+            delivery_status=DeliveryStatus.BOT_RECEIVED,  # Bot received from seller
+            has_2fa=True  # Mark as having 2FA since we just set it
         )
         
         await log_auth_action(phone, "finalize", "success")
@@ -1109,7 +1111,7 @@ async def confirm_delivery(account_id: str, request: DeliveryConfirmRequest):
     
     await update_account(
         phone,
-        delivery_status=DeliveryStatus.DELIVERED,
+        delivery_status=DeliveryStatus.BUYER_DELIVERED,  # Delivered to buyer
         delivered_at=datetime.utcnow(),
         delivery_count=new_count,
         pyrogram_session=None,  # Clear session
@@ -1175,11 +1177,14 @@ async def get_all_accounts_admin():
                 "delivered_at": acc.delivered_at.isoformat() if acc.delivered_at else None
             }
             
-            # Categorize
+            # Categorize based on status and delivery_status
             if acc.status and acc.status.value == "expired":
                 expired_accounts.append(account_data)
-            elif acc.delivery_status and acc.delivery_status.value == "delivered":
+            elif acc.delivery_status and acc.delivery_status.value in ["delivered", "buyer_delivered"]:
                 delivered_accounts.append(account_data)
+            elif acc.status and acc.status.value == "completed" and acc.generated_password:
+                # Completed accounts with password are ready (even if session missing)
+                ready_accounts.append(account_data)
             elif acc.pyrogram_session and acc.generated_password:
                 ready_accounts.append(account_data)
             else:
@@ -1243,6 +1248,125 @@ async def get_account_details_admin(account_id: str):
             "completed_at": account.completed_at.isoformat() if account.completed_at else None
         }
     }
+
+
+@router.post("/admin/account/{account_id}/fix")
+async def fix_account_admin(account_id: str, request: dict = None):
+    """
+    Fix account data manually (Admin endpoint)
+    Can reset delivery_count, fix status, etc.
+    """
+    from backend.models.database import async_session, Account
+    from sqlalchemy import select, update as sql_update
+    
+    phone = account_id
+    
+    async with async_session() as session:
+        result = await session.execute(
+            select(Account).where(Account.phone == phone)
+        )
+        account = result.scalar_one_or_none()
+        
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        
+        updates = {}
+        
+        # Handle different fix operations
+        if request:
+            if "reset_delivery_count" in request and request["reset_delivery_count"]:
+                updates["delivery_count"] = 0
+                updates["delivered_at"] = None
+            
+            if "set_status" in request:
+                status_map = {
+                    "completed": AuthStatus.COMPLETED,
+                    "authenticated": AuthStatus.AUTHENTICATED,
+                    "pending_code": AuthStatus.PENDING_CODE,
+                    "audit_passed": AuthStatus.AUDIT_PASSED
+                }
+                if request["set_status"] in status_map:
+                    updates["status"] = status_map[request["set_status"]]
+            
+            if "set_delivery_status" in request:
+                ds_map = {
+                    "bot_received": DeliveryStatus.BOT_RECEIVED,
+                    "ready": DeliveryStatus.READY,
+                    "buyer_delivered": DeliveryStatus.BUYER_DELIVERED
+                }
+                if request["set_delivery_status"] in ds_map:
+                    updates["delivery_status"] = ds_map[request["set_delivery_status"]]
+            
+            if "set_has_2fa" in request:
+                updates["has_2fa"] = request["set_has_2fa"]
+            
+            if "set_audit_passed" in request:
+                updates["audit_passed"] = request["set_audit_passed"]
+        
+        if updates:
+            for key, value in updates.items():
+                setattr(account, key, value)
+            await session.commit()
+        
+        return {
+            "status": "success",
+            "message": f"Account {phone} updated",
+            "updates": {k: str(v) for k, v in updates.items()}
+        }
+
+
+@router.get("/admin/account/{account_id}/raw")
+async def get_account_raw_admin(account_id: str):
+    """
+    Get raw account data from database (Admin endpoint)
+    Shows all fields exactly as stored
+    """
+    from backend.models.database import async_session, Account
+    from sqlalchemy import select
+    
+    phone = account_id
+    
+    async with async_session() as session:
+        result = await session.execute(
+            select(Account).where(Account.phone == phone)
+        )
+        account = result.scalar_one_or_none()
+        
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        
+        return {
+            "status": "success",
+            "raw_data": {
+                "phone": account.phone,
+                "telegram_id": account.telegram_id,
+                "first_name": account.first_name,
+                "status": account.status.value if account.status else None,
+                "pyrogram_session": "EXISTS" if account.pyrogram_session else None,
+                "pyrogram_session_length": len(account.pyrogram_session) if account.pyrogram_session else 0,
+                "telethon_session": "EXISTS" if account.telethon_session else None,
+                "has_2fa": account.has_2fa,
+                "has_recovery_email": account.has_recovery_email,
+                "other_sessions_count": account.other_sessions_count,
+                "generated_password": account.generated_password,
+                "delivery_status": account.delivery_status.value if account.delivery_status else None,
+                "last_code": account.last_code,
+                "transfer_mode": account.transfer_mode.value if account.transfer_mode else None,
+                "email_hash": account.email_hash,
+                "target_email": account.target_email,
+                "email_changed": account.email_changed,
+                "email_verified": account.email_verified,
+                "delivery_count": account.delivery_count,
+                "pyrogram_healthy": account.pyrogram_healthy,
+                "telethon_healthy": account.telethon_healthy,
+                "audit_passed": account.audit_passed,
+                "audit_issues": account.audit_issues,
+                "created_at": account.created_at.isoformat() if account.created_at else None,
+                "updated_at": account.updated_at.isoformat() if account.updated_at else None,
+                "completed_at": account.completed_at.isoformat() if account.completed_at else None,
+                "delivered_at": account.delivered_at.isoformat() if account.delivered_at else None
+            }
+        }
 
 
 # ============== Documentation Endpoint ==============
