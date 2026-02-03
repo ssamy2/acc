@@ -60,10 +60,17 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:8001",
+        "http://127.0.0.1:8001",
+        "https://acctest.channelsseller.site",
+        "http://acctest.channelsseller.site",
+        "*"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 app.include_router(v3_router)
