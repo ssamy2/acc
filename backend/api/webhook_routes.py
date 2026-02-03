@@ -57,21 +57,39 @@ class EmailPayload(BaseModel):
 
 
 def extract_telegram_code(body: str) -> Optional[str]:
-    """Extract 5-6 digit Telegram verification code from email body"""
-    # Pattern for Telegram verification codes (5-6 digits)
+    """
+    Extract 5-6 digit Telegram verification code from email body
+    Supports multiple languages with intelligent pattern matching
+    """
+    
+    # Multi-language patterns for Telegram codes
+    # Priority order: specific patterns first, then generic fallbacks
     patterns = [
-        r'(?:code|код|رمز[كک]?|كود)[\s:]*(\d{5,6})',  # "رمزك هو: 380469" or "code: 12345"
-        r'(\d{5,6})(?:\s*is your|هو رمز)',  # "12345 is your code"
-        r'\b(\d{5,6})\b',  # Any standalone 5-6 digit number
+        # Pattern 1: Language-specific "code/رمز/код" keywords followed by digits
+        # Covers: English, Arabic (رمز/رمزك/كود/كودك), Russian (код), Persian, Turkish, etc.
+        r'(?:code|verification\s+code|login\s+code|код|رمز[كک]?|كود[كک]?|código|codice|code de vérification|验证码|驗證碼|認証コード|인증\s*코드|código de verificação|Bestätigungscode|código de verificación|codice di verifica|कोड|código|mã xác nhận)[\s:：]*[^\d]*?(\d{5,6})',
+        
+        # Pattern 2: Digits followed by "is your code" in multiple languages
+        r'(\d{5,6})[\s\-–—]*(?:is your|هو رمز|это ваш|é o seu|est votre|is je|är din|ist dein|es tu|è il tuo|あなたの|당신의|是您的|是你的)',
+        
+        # Pattern 3: Subject line pattern - "Your code is: 12345"
+        r'(?:your|tu|votre|dein|su|あなたの|당신의|您的)[\s\w]*(?:code|код|رمز|código|codice)[\s:：]*(\d{5,6})',
+        
+        # Pattern 4: Standalone 5-6 digit number (last resort)
+        # Only match if surrounded by whitespace or punctuation to avoid false positives
+        r'(?:^|[\s\n\r.!?:：،。！？])\s*(\d{5,6})(?=[\s\n\r.!?:：،。！？]|$)',
     ]
     
     for pattern in patterns:
-        match = re.search(pattern, body, re.IGNORECASE | re.UNICODE)
+        match = re.search(pattern, body, re.IGNORECASE | re.UNICODE | re.MULTILINE)
         if match:
             code = match.group(1)
-            # Verify it's a valid code (5 or 6 digits)
+            # Verify it's a valid code length
             if len(code) in [5, 6]:
-                return code
+                # Additional validation: ensure it's not all zeros
+                # Allow sequential numbers as they can be valid codes
+                if not (code == '00000' or code == '000000'):
+                    return code
     
     return None
 
