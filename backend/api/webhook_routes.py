@@ -57,18 +57,21 @@ class EmailPayload(BaseModel):
 
 
 def extract_telegram_code(body: str) -> Optional[str]:
-    """Extract 5-digit Telegram verification code from email body"""
-    # Pattern for Telegram verification codes (5 digits)
+    """Extract 5-6 digit Telegram verification code from email body"""
+    # Pattern for Telegram verification codes (5-6 digits)
     patterns = [
-        r'(?:code|код|رمز|كود)[\s:]*(\d{5})',  # "code: 12345" or "код: 12345"
-        r'(\d{5})(?:\s*is your|هو رمز)',  # "12345 is your code"
-        r'\b(\d{5})\b',  # Any standalone 5-digit number
+        r'(?:code|код|رمز[كک]?|كود)[\s:]*(\d{5,6})',  # "رمزك هو: 380469" or "code: 12345"
+        r'(\d{5,6})(?:\s*is your|هو رمز)',  # "12345 is your code"
+        r'\b(\d{5,6})\b',  # Any standalone 5-6 digit number
     ]
     
     for pattern in patterns:
-        match = re.search(pattern, body, re.IGNORECASE)
+        match = re.search(pattern, body, re.IGNORECASE | re.UNICODE)
         if match:
-            return match.group(1)
+            code = match.group(1)
+            # Verify it's a valid code (5 or 6 digits)
+            if len(code) in [5, 6]:
+                return code
     
     return None
 
@@ -96,31 +99,14 @@ async def receive_email_webhook(request: Request):
     }
     """
     try:
-        # Get raw body for logging
-        raw_body = await request.body()
-        raw_body_str = raw_body.decode('utf-8', errors='ignore')
-        
-        # Log everything received
-        logger.info("=" * 60)
-        logger.info("📧 EMAIL WEBHOOK RECEIVED")
-        logger.info("=" * 60)
-        logger.info(f"Timestamp: {datetime.now().isoformat()}")
-        logger.info(f"Headers: {dict(request.headers)}")
-        logger.info(f"Raw Body: {raw_body_str}")
-        logger.info("=" * 60)
-        
         # Parse JSON
         try:
             data = await request.json()
         except Exception as e:
+            raw_body = await request.body()
+            raw_body_str = raw_body.decode('utf-8', errors='ignore')
             logger.error(f"Failed to parse JSON: {e}")
-            logger.error(f"Raw body was: {raw_body_str}")
-            return {"status": "error", "message": "Invalid JSON", "raw": raw_body_str[:500]}
-        
-        # Log parsed data
-        logger.info("📋 PARSED DATA:")
-        for key, value in data.items():
-            logger.info(f"  {key}: {value}")
+            return {"status": "error", "message": "Invalid JSON"}
         
         # Extract fields
         from_email = data.get("from", data.get("from_email", "unknown"))
@@ -133,17 +119,11 @@ async def receive_email_webhook(request: Request):
         if not email_hash:
             email_hash = extract_hash_from_email(to_email)
         
-        logger.info(f"📬 From: {from_email}")
-        logger.info(f"📬 To: {to_email}")
-        logger.info(f"📬 Hash: {email_hash}")
-        logger.info(f"📬 Subject: {subject}")
-        logger.info(f"📬 Body Preview: {body[:200]}...")
-        
         # Extract verification code
         code = extract_telegram_code(body)
         
         if code:
-            logger.info(f"✅ EXTRACTED CODE: {code}")
+            logger.info(f"✅ Code {code} extracted for hash: {email_hash}")
             
             # Store the code
             received_codes[email_hash] = {
@@ -155,12 +135,6 @@ async def receive_email_webhook(request: Request):
                 "raw_body": body
             }
             
-            # Also store by phone-like hash
-            if email_hash:
-                received_codes[email_hash] = received_codes[email_hash]
-            
-            logger.info(f"💾 Code stored for hash: {email_hash}")
-            
             return {
                 "status": "success",
                 "message": "Code extracted and stored",
@@ -168,7 +142,7 @@ async def receive_email_webhook(request: Request):
                 "code_extracted": True
             }
         else:
-            logger.warning(f"⚠️ No verification code found in email body")
+            logger.warning(f"⚠️ No code found for hash: {email_hash}")
             
             # Still store the raw data for debugging
             received_codes[email_hash] = {
