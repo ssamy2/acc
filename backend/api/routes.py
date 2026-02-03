@@ -184,8 +184,61 @@ async def init_auth(request: InitAuthRequest, req: Request):
         # Update transfer mode
         await update_account(phone, transfer_mode=transfer_mode)
         
-        # Send code via Pyrogram
+        # Check if already authenticated in both sessions
         manager = get_pyrogram()
+        telethon_mgr = get_telethon()
+        
+        # Check Pyrogram session
+        pyrogram_check = await manager.get_me_info(phone)
+        pyrogram_authenticated = pyrogram_check.get("status") == "success"
+        
+        # Check Telethon session
+        telethon_authenticated = False
+        try:
+            telethon_check = await telethon_mgr.get_me_info(phone)
+            telethon_authenticated = telethon_check.get("status") == "success"
+        except:
+            pass
+        
+        # If already authenticated in either session, skip code sending
+        if pyrogram_authenticated or telethon_authenticated:
+            logger.info(f"Account already authenticated: pyrogram={pyrogram_authenticated}, telethon={telethon_authenticated}")
+            
+            # Get user info for telegram_id
+            user_info = pyrogram_check if pyrogram_authenticated else telethon_check
+            telegram_id = user_info.get("id") if user_info.get("status") == "success" else None
+            
+            # Generate email info
+            email_info = get_full_email_info(telegram_id, phone) if telegram_id else {}
+            
+            # Update account
+            await update_account(
+                phone,
+                status=AuthStatus.AUTHENTICATED,
+                telegram_id=telegram_id,
+                email_hash=email_info.get("hash"),
+                target_email=email_info.get("email")
+            )
+            await log_auth_action(phone, "init_auth", "already_authenticated")
+            
+            # Start session timer
+            cache_session_data(phone, started_at=datetime.utcnow(), telegram_id=telegram_id)
+            
+            duration = time.time() - start_time
+            response = {
+                "status": "already_authenticated",
+                "message": "Account already authenticated. Skip to audit.",
+                "telegram_id": telegram_id,
+                "target_email": email_info.get("email"),
+                "email_hash": email_info.get("hash"),
+                "transfer_mode": request.transfer_mode,
+                "session_timeout": SESSION_TIMEOUT_SECONDS,
+                "duration": duration
+            }
+            log_response(logger, 200, response)
+            return response
+        
+        # Send code via Pyrogram
         result = await manager.send_code(phone)
         
         logger.info(f"send_code result: {result}")
