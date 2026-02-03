@@ -3,144 +3,128 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>استلام الحسابات - Telegram Escrow</title>
+    <title>لوحة التحكم - Telegram Escrow</title>
     <link rel="stylesheet" href="style_v3.css">
     <style>
-        .receive-container {
-            max-width: 600px;
+        .dashboard-container {
+            max-width: 1200px;
             margin: 0 auto;
         }
-        .account-card {
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        .stat-card {
             background: white;
             border-radius: 12px;
-            padding: 25px;
-            margin-bottom: 20px;
+            padding: 20px;
+            text-align: center;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
-        .account-card h3 {
+        .stat-card .number {
+            font-size: 2.5rem;
+            font-weight: bold;
             color: #0088cc;
-            margin-bottom: 15px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
         }
-        .account-info {
-            display: grid;
-            gap: 12px;
-        }
-        .info-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px;
-            background: #f8f9fa;
-            border-radius: 8px;
-        }
-        .info-row .label {
-            font-weight: 500;
+        .stat-card .label {
             color: #666;
+            font-size: 0.9rem;
         }
-        .info-row .value {
-            font-family: monospace;
-            direction: ltr;
+        .stat-card.ready .number { color: #28a745; }
+        .stat-card.pending .number { color: #ffc107; }
+        .stat-card.delivered .number { color: #17a2b8; }
+        .stat-card.expired .number { color: #dc3545; }
+        
+        .section-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .tab-btn {
+            padding: 10px 20px;
+            border: 2px solid #0088cc;
+            background: white;
+            color: #0088cc;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        .tab-btn.active {
+            background: #0088cc;
+            color: white;
+        }
+        
+        .accounts-table {
+            width: 100%;
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .accounts-table th, .accounts-table td {
+            padding: 12px 15px;
+            text-align: right;
+            border-bottom: 1px solid #eee;
+        }
+        .accounts-table th {
+            background: #f8f9fa;
+            font-weight: 600;
             color: #333;
         }
-        .info-row .value.password {
-            background: #ffe6e6;
-            padding: 5px 10px;
-            border-radius: 4px;
+        .accounts-table tr:hover {
+            background: #f8f9fa;
+        }
+        .accounts-table .phone {
+            font-family: monospace;
+            direction: ltr;
             font-weight: bold;
         }
+        .accounts-table .password {
+            font-family: monospace;
+            direction: ltr;
+            background: #ffe6e6;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+        .status-ready { background: #d4edda; color: #155724; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-delivered { background: #d1ecf1; color: #0c5460; }
+        .status-expired { background: #f8d7da; color: #721c24; }
+        .status-authenticated { background: #cce5ff; color: #004085; }
+        
         .copy-btn {
             background: #0088cc;
             color: white;
             border: none;
-            padding: 5px 10px;
+            padding: 3px 8px;
             border-radius: 4px;
             cursor: pointer;
-            margin-right: 10px;
+            font-size: 0.8rem;
         }
-        .copy-btn:hover {
-            background: #006699;
-        }
-        .status-badge {
-            display: inline-block;
-            padding: 5px 15px;
-            border-radius: 20px;
+        .copy-btn:hover { background: #006699; }
+        
+        .action-btn {
+            padding: 5px 12px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
             font-size: 0.85rem;
-            font-weight: 500;
         }
-        .status-ready {
-            background: #d4edda;
-            color: #155724;
-        }
-        .status-pending {
-            background: #fff3cd;
-            color: #856404;
-        }
-        .delivery-section {
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 1px solid #eee;
-        }
-        .step-box {
-            background: #e7f3ff;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 15px 0;
-        }
-        .step-box h4 {
-            color: #0088cc;
-            margin-bottom: 10px;
-        }
-        .step-box ol {
-            padding-right: 20px;
-            margin: 0;
-        }
-        .step-box li {
-            margin-bottom: 8px;
-        }
-        .code-input-group {
-            display: flex;
-            gap: 10px;
-            margin: 15px 0;
-        }
-        .code-input-group input {
-            flex: 1;
-            padding: 12px;
-            border: 2px solid #ddd;
-            border-radius: 8px;
-            font-size: 1.2rem;
-            text-align: center;
-            letter-spacing: 5px;
-        }
-        .timer {
-            text-align: center;
-            font-size: 1.5rem;
-            color: #dc3545;
-            margin: 15px 0;
-        }
-        .success-animation {
-            text-align: center;
-            padding: 30px;
-        }
-        .success-animation .icon {
-            font-size: 4rem;
-            animation: bounce 0.5s ease;
-        }
-        @keyframes bounce {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        .no-accounts {
-            text-align: center;
-            padding: 50px;
-            color: #666;
-        }
-        .no-accounts .icon {
-            font-size: 4rem;
-            opacity: 0.5;
-        }
+        .action-btn.receive { background: #28a745; color: white; }
+        .action-btn.view { background: #17a2b8; color: white; }
+        
         .refresh-btn {
             background: transparent;
             border: 1px solid #0088cc;
@@ -148,97 +132,150 @@
             padding: 10px 20px;
             border-radius: 8px;
             cursor: pointer;
-            margin-top: 20px;
         }
+        
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal.active { display: flex; }
+        .modal-content {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+        .detail-row .label { color: #666; }
+        .detail-row .value { font-family: monospace; direction: ltr; }
     </style>
 </head>
 <body>
-    <div class="container receive-container">
+    <div class="container dashboard-container">
         <header>
-            <h1>📥 استلام الحسابات</h1>
-            <p class="subtitle">صفحة المشتري لاستلام الحسابات</p>
+            <h1>� لوحة التحكم - إدارة الحسابات</h1>
+            <p class="subtitle">عرض وإدارة جميع الحسابات</p>
         </header>
 
         <!-- Status Message -->
         <div id="status-message" class="status-box hidden"></div>
 
+        <!-- Stats Cards -->
+        <div id="stats-view" class="stats-grid">
+            <div class="stat-card">
+                <div class="number" id="stat-total">-</div>
+                <div class="label">إجمالي الحسابات</div>
+            </div>
+            <div class="stat-card ready">
+                <div class="number" id="stat-ready">-</div>
+                <div class="label">جاهز للاستلام</div>
+            </div>
+            <div class="stat-card pending">
+                <div class="number" id="stat-pending">-</div>
+                <div class="label">قيد التسجيل</div>
+            </div>
+            <div class="stat-card delivered">
+                <div class="number" id="stat-delivered">-</div>
+                <div class="label">تم التسليم</div>
+            </div>
+            <div class="stat-card expired">
+                <div class="number" id="stat-expired">-</div>
+                <div class="label">منتهي الصلاحية</div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="section-tabs">
+            <button class="tab-btn active" onclick="switchTab('ready')">✅ جاهز للاستلام</button>
+            <button class="tab-btn" onclick="switchTab('pending')">⏳ قيد التسجيل</button>
+            <button class="tab-btn" onclick="switchTab('delivered')">📦 تم التسليم</button>
+            <button class="tab-btn" onclick="switchTab('expired')">⚠️ منتهي</button>
+            <button class="refresh-btn" onclick="loadDashboard()">🔄 تحديث</button>
+        </div>
+
         <!-- Loading -->
         <div id="loading-view" class="card">
             <div class="loading">
                 <span class="loader"></span>
-                جاري تحميل الحسابات المتاحة...
+                جاري تحميل البيانات...
             </div>
         </div>
 
-        <!-- No Accounts -->
-        <div id="no-accounts-view" class="card hidden">
-            <div class="no-accounts">
-                <div class="icon">📭</div>
-                <h3>لا توجد حسابات متاحة للاستلام</h3>
-                <p>لم يتم العثور على حسابات جاهزة للتسليم</p>
-                <button onclick="loadAccounts()" class="refresh-btn">🔄 تحديث</button>
+        <!-- Accounts Table -->
+        <div id="accounts-table-view" class="hidden">
+            <table class="accounts-table">
+                <thead>
+                    <tr>
+                        <th>الهاتف</th>
+                        <th>Telegram ID</th>
+                        <th>الحالة</th>
+                        <th>كلمة المرور</th>
+                        <th>Sessions</th>
+                        <th>الإجراءات</th>
+                    </tr>
+                </thead>
+                <tbody id="accounts-tbody"></tbody>
+            </table>
+            <div id="no-data" class="no-data hidden">
+                <p>لا توجد حسابات في هذه الفئة</p>
             </div>
         </div>
 
-        <!-- Accounts List -->
-        <div id="accounts-view" class="hidden">
-            <div id="accounts-list"></div>
-        </div>
-
-        <!-- Delivery Process -->
-        <div id="delivery-view" class="card hidden">
-            <h2>📦 عملية الاستلام</h2>
-            <div id="delivery-phone"></div>
-            
-            <div class="step-box">
-                <h4>خطوات الاستلام:</h4>
-                <ol>
-                    <li>اضغط على "طلب كود الدخول"</li>
-                    <li>سيتم إرسال كود إلى التيليجرام المرتبط بالحساب</li>
-                    <li>أدخل الكود هنا للتأكيد</li>
-                    <li>بعد التأكيد ستحصل على بيانات الدخول الكاملة</li>
-                </ol>
-            </div>
-
-            <div id="delivery-step-1">
-                <button id="btn-request-code" onclick="requestDeliveryCode()" class="btn-primary">
-                    📨 طلب كود الدخول
-                </button>
-            </div>
-
-            <div id="delivery-step-2" class="hidden">
-                <p>تم إرسال كود التحقق! أدخله هنا:</p>
-                <div class="code-input-group">
-                    <input type="text" id="delivery-code-input" placeholder="12345" maxlength="6">
-                    <button onclick="verifyDeliveryCode()" class="btn-success">تأكيد</button>
+        <!-- Account Details Modal -->
+        <div id="account-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>📱 تفاصيل الحساب</h3>
+                    <button class="modal-close" onclick="closeModal()">&times;</button>
                 </div>
-                <div id="timer" class="timer"></div>
-                <p class="hint">إذا لم يصل الكود، سيتم جلبه تلقائياً من الإيميل</p>
+                <div id="modal-body"></div>
             </div>
-
-            <div id="delivery-step-3" class="hidden">
-                <div class="success-animation">
-                    <div class="icon">🎉</div>
-                    <h3>تم الاستلام بنجاح!</h3>
-                </div>
-                <div id="final-credentials"></div>
-            </div>
-
-            <button onclick="backToList()" class="btn-secondary" style="margin-top: 20px;">
-                ← العودة للقائمة
-            </button>
         </div>
 
         <footer>
-            <p>Telegram Escrow - نظام استلام الحسابات الآمن</p>
-            <p><a href="/">العودة للصفحة الرئيسية</a></p>
+            <p>Telegram Escrow - لوحة التحكم</p>
+            <p><a href="/">العودة للصفحة الرئيسية</a> | <a href="/v3">صفحة التسجيل</a></p>
         </footer>
     </div>
 
     <script>
         const API_URL = window.location.origin + "/api/v1";
-        let currentAccount = null;
-        let countdownInterval = null;
+        let dashboardData = null;
+        let currentTab = 'ready';
 
         async function apiCall(endpoint, method = 'GET', data = null) {
             const options = {
@@ -258,214 +295,213 @@
             el.className = `status-box ${type}`;
             el.innerHTML = message;
             el.classList.remove('hidden');
+            setTimeout(() => el.classList.add('hidden'), 3000);
         }
 
-        function hideStatus() {
-            document.getElementById('status-message').classList.add('hidden');
-        }
-
-        function showView(viewId) {
-            ['loading-view', 'no-accounts-view', 'accounts-view', 'delivery-view'].forEach(id => {
-                document.getElementById(id).classList.add('hidden');
-            });
-            document.getElementById(viewId).classList.remove('hidden');
-        }
-
-        async function loadAccounts() {
-            showView('loading-view');
-            hideStatus();
+        async function loadDashboard() {
+            document.getElementById('loading-view').classList.remove('hidden');
+            document.getElementById('accounts-table-view').classList.add('hidden');
             
             try {
-                // Get all accounts that are ready for delivery
-                const result = await apiCall('/accounts/ready');
+                dashboardData = await apiCall('/admin/accounts/all');
                 
-                if (!result.accounts || result.accounts.length === 0) {
-                    showView('no-accounts-view');
-                    return;
-                }
-
-                renderAccounts(result.accounts);
-                showView('accounts-view');
+                // Update stats
+                document.getElementById('stat-total').textContent = dashboardData.summary.total;
+                document.getElementById('stat-ready').textContent = dashboardData.summary.ready;
+                document.getElementById('stat-pending').textContent = dashboardData.summary.pending;
+                document.getElementById('stat-delivered').textContent = dashboardData.summary.delivered;
+                document.getElementById('stat-expired').textContent = dashboardData.summary.expired;
                 
-            } catch (error) {
-                // If endpoint doesn't exist, show demo data for testing
-                console.log('Using demo data:', error.message);
-                showView('no-accounts-view');
-            }
-        }
-
-        function renderAccounts(accounts) {
-            const container = document.getElementById('accounts-list');
-            container.innerHTML = accounts.map(acc => `
-                <div class="account-card">
-                    <h3>📱 ${acc.phone}</h3>
-                    <div class="account-info">
-                        <div class="info-row">
-                            <span class="label">Telegram ID:</span>
-                            <span class="value">${acc.telegram_id || 'N/A'}</span>
-                        </div>
-                        <div class="info-row">
-                            <span class="label">الحالة:</span>
-                            <span class="status-badge ${acc.status === 'ready' ? 'status-ready' : 'status-pending'}">
-                                ${acc.status === 'ready' ? 'جاهز للاستلام' : 'قيد المعالجة'}
-                            </span>
-                        </div>
-                        <div class="info-row">
-                            <span class="label">وضع التحويل:</span>
-                            <span class="value">${acc.transfer_mode === 'bot_only' ? 'كامل (البوت فقط)' : 'مشترك'}</span>
-                        </div>
-                    </div>
-                    <button onclick="startDelivery('${acc.phone}')" class="btn-primary" style="margin-top: 15px;">
-                        📥 استلام الحساب
-                    </button>
-                </div>
-            `).join('');
-        }
-
-        function startDelivery(phone) {
-            currentAccount = { phone };
-            document.getElementById('delivery-phone').innerHTML = `
-                <div class="info-row">
-                    <span class="label">رقم الهاتف:</span>
-                    <span class="value">${phone}</span>
-                </div>
-            `;
-            
-            // Reset steps
-            document.getElementById('delivery-step-1').classList.remove('hidden');
-            document.getElementById('delivery-step-2').classList.add('hidden');
-            document.getElementById('delivery-step-3').classList.add('hidden');
-            
-            showView('delivery-view');
-        }
-
-        async function requestDeliveryCode() {
-            const btn = document.getElementById('btn-request-code');
-            btn.disabled = true;
-            btn.innerHTML = '<span class="loader"></span> جاري الإرسال...';
-            
-            try {
-                const result = await apiCall(`/delivery/request-code/${encodeURIComponent(currentAccount.phone)}`, 'POST');
+                // Render current tab
+                renderTable(currentTab);
                 
-                if (result.status === 'success') {
-                    currentAccount.password = result.two_fa_password;
-                    
-                    document.getElementById('delivery-step-1').classList.add('hidden');
-                    document.getElementById('delivery-step-2').classList.remove('hidden');
-                    
-                    // Start 20 second countdown
-                    startCountdown(result.fallback_seconds || 20);
-                    
-                    showStatus('تم إرسال كود التحقق! أدخله أو انتظر الجلب التلقائي', 'success');
-                }
+                document.getElementById('loading-view').classList.add('hidden');
+                document.getElementById('accounts-table-view').classList.remove('hidden');
                 
             } catch (error) {
+                console.error('Error loading dashboard:', error);
                 showStatus(`خطأ: ${error.message}`, 'error');
-                btn.disabled = false;
-                btn.innerHTML = '📨 طلب كود الدخول';
+                document.getElementById('loading-view').classList.add('hidden');
             }
         }
 
-        function startCountdown(seconds) {
-            let remaining = seconds;
-            const timerEl = document.getElementById('timer');
+        function switchTab(tab) {
+            currentTab = tab;
             
-            countdownInterval = setInterval(() => {
-                timerEl.textContent = `⏱️ ${remaining} ثانية`;
-                remaining--;
-                
-                if (remaining < 0) {
-                    clearInterval(countdownInterval);
-                    timerEl.textContent = 'جاري جلب الكود تلقائياً...';
-                    autoFetchCode();
-                }
-            }, 1000);
+            // Update active tab button
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            renderTable(tab);
         }
 
-        async function autoFetchCode() {
-            try {
-                // Try to get code from webhook
-                const result = await apiCall(`/email/code/${encodeURIComponent(currentAccount.phone)}?wait_seconds=5`);
-                
-                if (result.status === 'received' && result.code) {
-                    document.getElementById('delivery-code-input').value = result.code;
-                    showStatus('تم جلب الكود تلقائياً!', 'success');
-                    verifyDeliveryCode();
-                } else {
-                    showStatus('لم يتم استلام الكود. حاول مرة أخرى.', 'warning');
-                }
-            } catch (error) {
-                showStatus(`خطأ في جلب الكود: ${error.message}`, 'error');
+        function renderTable(tab) {
+            if (!dashboardData) return;
+            
+            let accounts = [];
+            switch(tab) {
+                case 'ready': accounts = dashboardData.ready_accounts; break;
+                case 'pending': accounts = dashboardData.pending_accounts; break;
+                case 'delivered': accounts = dashboardData.delivered_accounts; break;
+                case 'expired': accounts = dashboardData.expired_accounts; break;
             }
-        }
-
-        async function verifyDeliveryCode() {
-            const code = document.getElementById('delivery-code-input').value.trim();
             
-            if (!code) {
-                showStatus('الرجاء إدخال الكود', 'error');
+            const tbody = document.getElementById('accounts-tbody');
+            const noData = document.getElementById('no-data');
+            
+            if (accounts.length === 0) {
+                tbody.innerHTML = '';
+                noData.classList.remove('hidden');
                 return;
             }
             
-            if (countdownInterval) {
-                clearInterval(countdownInterval);
-            }
+            noData.classList.add('hidden');
             
+            tbody.innerHTML = accounts.map(acc => `
+                <tr>
+                    <td class="phone">${acc.phone}</td>
+                    <td>${acc.telegram_id || '-'}</td>
+                    <td>
+                        <span class="status-badge status-${getStatusClass(acc.status)}">
+                            ${getStatusText(acc.status)}
+                        </span>
+                    </td>
+                    <td>
+                        ${acc.password ? `
+                            <span class="password">${acc.password}</span>
+                            <button class="copy-btn" onclick="copyText('${acc.password}')">📋</button>
+                        ` : '-'}
+                    </td>
+                    <td>
+                        ${acc.has_pyrogram_session ? '✅ Pyrogram' : '❌'} 
+                        ${acc.has_telethon_session ? '✅ Telethon' : ''}
+                    </td>
+                    <td>
+                        <button class="action-btn view" onclick="viewAccount('${acc.phone}')">👁️ عرض</button>
+                        ${tab === 'ready' ? `<button class="action-btn receive" onclick="startDelivery('${acc.phone}')">📥 استلام</button>` : ''}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function getStatusClass(status) {
+            const map = {
+                'completed': 'ready',
+                'authenticated': 'authenticated',
+                'pending_code': 'pending',
+                'pending_2fa': 'pending',
+                'expired': 'expired',
+                'delivered': 'delivered'
+            };
+            return map[status] || 'pending';
+        }
+
+        function getStatusText(status) {
+            const map = {
+                'completed': 'مكتمل',
+                'authenticated': 'مصادق',
+                'pending_code': 'بانتظار الكود',
+                'pending_2fa': 'بانتظار 2FA',
+                'expired': 'منتهي',
+                'audit_passed': 'اجتاز الفحص',
+                'audit_failed': 'فشل الفحص'
+            };
+            return map[status] || status;
+        }
+
+        async function viewAccount(phone) {
             try {
-                const result = await apiCall(`/delivery/confirm/${encodeURIComponent(currentAccount.phone)}`, 'POST', {
-                    received: true,
-                    code: code
-                });
+                const result = await apiCall(`/admin/account/${encodeURIComponent(phone)}`);
+                const acc = result.account;
                 
-                if (result.status === 'success') {
-                    document.getElementById('delivery-step-2').classList.add('hidden');
-                    document.getElementById('delivery-step-3').classList.remove('hidden');
-                    
-                    document.getElementById('final-credentials').innerHTML = `
-                        <div class="account-info">
-                            <div class="info-row">
-                                <span class="label">رقم الهاتف:</span>
-                                <span class="value">${currentAccount.phone}</span>
-                                <button class="copy-btn" onclick="copyText('${currentAccount.phone}')">📋</button>
-                            </div>
-                            <div class="info-row">
-                                <span class="label">كلمة مرور 2FA:</span>
-                                <span class="value password">${currentAccount.password || result.password || 'N/A'}</span>
-                                <button class="copy-btn" onclick="copyText('${currentAccount.password || result.password}')">📋</button>
-                            </div>
-                            <div class="info-row">
-                                <span class="label">رقم الاستلام:</span>
-                                <span class="value">#${result.delivery_number || 1}</span>
-                            </div>
-                        </div>
-                        <p style="margin-top: 15px; text-align: center; color: #28a745;">
-                            ✅ تم تسجيل الاستلام بنجاح!
-                        </p>
-                    `;
-                    
-                    showStatus('تم الاستلام بنجاح!', 'success');
-                }
+                document.getElementById('modal-body').innerHTML = `
+                    <div class="detail-row">
+                        <span class="label">الهاتف:</span>
+                        <span class="value">${acc.phone} <button class="copy-btn" onclick="copyText('${acc.phone}')">📋</button></span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Telegram ID:</span>
+                        <span class="value">${acc.telegram_id || '-'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">الحالة:</span>
+                        <span class="value">${getStatusText(acc.status)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">كلمة المرور:</span>
+                        <span class="value">${acc.password || '-'} ${acc.password ? `<button class="copy-btn" onclick="copyText('${acc.password}')">📋</button>` : ''}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">الإيميل المستهدف:</span>
+                        <span class="value">${acc.target_email || '-'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Hash:</span>
+                        <span class="value">${acc.email_hash || '-'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">الإيميل متغير:</span>
+                        <span class="value">${acc.email_changed ? '✅ نعم' : '❌ لا'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">2FA:</span>
+                        <span class="value">${acc.has_2fa ? '✅ مفعل' : '❌ غير مفعل'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">اجتاز الفحص:</span>
+                        <span class="value">${acc.audit_passed ? '✅ نعم' : '❌ لا'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Pyrogram Session:</span>
+                        <span class="value">${acc.has_pyrogram_session ? '✅ موجود' : '❌ غير موجود'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">حالة الجلسة:</span>
+                        <span class="value">${acc.session_status === 'active' ? '🟢 نشط' : '🔴 غير نشط'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">عدد التسليمات:</span>
+                        <span class="value">${acc.delivery_count}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">تاريخ الإنشاء:</span>
+                        <span class="value">${acc.created_at ? new Date(acc.created_at).toLocaleString('ar-EG') : '-'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">تاريخ الإكمال:</span>
+                        <span class="value">${acc.completed_at ? new Date(acc.completed_at).toLocaleString('ar-EG') : '-'}</span>
+                    </div>
+                `;
+                
+                document.getElementById('account-modal').classList.add('active');
                 
             } catch (error) {
                 showStatus(`خطأ: ${error.message}`, 'error');
             }
+        }
+
+        function closeModal() {
+            document.getElementById('account-modal').classList.remove('active');
+        }
+
+        function startDelivery(phone) {
+            // Redirect to delivery flow or show delivery modal
+            window.location.href = `/receive-delivery?phone=${encodeURIComponent(phone)}`;
         }
 
         function copyText(text) {
             navigator.clipboard.writeText(text).then(() => {
                 showStatus('تم النسخ!', 'success');
-                setTimeout(hideStatus, 2000);
             });
         }
 
-        function backToList() {
-            if (countdownInterval) clearInterval(countdownInterval);
-            currentAccount = null;
-            loadAccounts();
-        }
+        // Close modal on outside click
+        document.getElementById('account-modal').addEventListener('click', function(e) {
+            if (e.target === this) closeModal();
+        });
 
         // Initialize
-        document.addEventListener('DOMContentLoaded', loadAccounts);
+        document.addEventListener('DOMContentLoaded', loadDashboard);
     </script>
 </body>
 </html>

@@ -1133,6 +1133,118 @@ async def confirm_delivery(account_id: str, request: DeliveryConfirmRequest):
     }
 
 
+# ============== Dashboard / Admin Endpoints ==============
+
+@router.get("/admin/accounts/all")
+async def get_all_accounts_admin():
+    """
+    Get ALL accounts with full details (Admin endpoint)
+    Includes: phone, status, password, sessions, telegram_id, etc.
+    """
+    from backend.models.database import async_session, Account
+    from sqlalchemy import select
+    
+    async with async_session() as session:
+        result = await session.execute(select(Account))
+        accounts = result.scalars().all()
+        
+        # Categorize accounts
+        ready_accounts = []      # Completed and ready for delivery
+        pending_accounts = []    # In registration process
+        delivered_accounts = []  # Already delivered
+        expired_accounts = []    # Expired sessions
+        
+        for acc in accounts:
+            account_data = {
+                "phone": acc.phone,
+                "telegram_id": acc.telegram_id,
+                "status": acc.status.value if acc.status else "unknown",
+                "transfer_mode": acc.transfer_mode.value if acc.transfer_mode else "bot_only",
+                "password": acc.generated_password,
+                "target_email": acc.target_email,
+                "email_hash": acc.email_hash,
+                "email_changed": acc.email_changed or False,
+                "has_2fa": acc.has_2fa or False,
+                "audit_passed": acc.audit_passed or False,
+                "has_pyrogram_session": acc.pyrogram_session is not None,
+                "has_telethon_session": acc.telethon_session is not None,
+                "delivery_status": acc.delivery_status.value if acc.delivery_status else None,
+                "delivery_count": acc.delivery_count or 0,
+                "created_at": acc.created_at.isoformat() if acc.created_at else None,
+                "completed_at": acc.completed_at.isoformat() if acc.completed_at else None,
+                "delivered_at": acc.delivered_at.isoformat() if acc.delivered_at else None
+            }
+            
+            # Categorize
+            if acc.status and acc.status.value == "expired":
+                expired_accounts.append(account_data)
+            elif acc.delivery_status and acc.delivery_status.value == "delivered":
+                delivered_accounts.append(account_data)
+            elif acc.pyrogram_session and acc.generated_password:
+                ready_accounts.append(account_data)
+            else:
+                pending_accounts.append(account_data)
+        
+        return {
+            "status": "success",
+            "summary": {
+                "total": len(accounts),
+                "ready": len(ready_accounts),
+                "pending": len(pending_accounts),
+                "delivered": len(delivered_accounts),
+                "expired": len(expired_accounts)
+            },
+            "ready_accounts": ready_accounts,
+            "pending_accounts": pending_accounts,
+            "delivered_accounts": delivered_accounts,
+            "expired_accounts": expired_accounts
+        }
+
+
+@router.get("/admin/account/{account_id}")
+async def get_account_details_admin(account_id: str):
+    """
+    Get full details of a specific account (Admin endpoint)
+    """
+    phone = account_id
+    account = await get_account(phone)
+    
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    # Check session status
+    manager = get_pyrogram()
+    session_status = "unknown"
+    try:
+        check = await manager.get_me_info(phone)
+        session_status = "active" if check.get("status") == "success" else "inactive"
+    except:
+        session_status = "inactive"
+    
+    return {
+        "status": "success",
+        "account": {
+            "phone": account.phone,
+            "telegram_id": account.telegram_id,
+            "status": account.status.value if account.status else "unknown",
+            "transfer_mode": account.transfer_mode.value if account.transfer_mode else "bot_only",
+            "password": account.generated_password,
+            "target_email": account.target_email,
+            "email_hash": account.email_hash,
+            "email_changed": account.email_changed or False,
+            "has_2fa": account.has_2fa or False,
+            "audit_passed": account.audit_passed or False,
+            "has_pyrogram_session": account.pyrogram_session is not None,
+            "has_telethon_session": account.telethon_session is not None,
+            "session_status": session_status,
+            "delivery_status": account.delivery_status.value if account.delivery_status else None,
+            "delivery_count": account.delivery_count or 0,
+            "created_at": account.created_at.isoformat() if account.created_at else None,
+            "completed_at": account.completed_at.isoformat() if account.completed_at else None
+        }
+    }
+
+
 # ============== Documentation Endpoint ==============
 
 @router.get("/docs/internal")
