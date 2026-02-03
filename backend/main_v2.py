@@ -81,6 +81,16 @@ async def dashboard():
 async def receive_page():
     return FileResponse("frontend/receive.html")
 
+@app.get("/health")
+@app.get("/actuator/health")
+async def health_check():
+    """Health check endpoint for monitoring"""
+    return {
+        "status": "healthy",
+        "service": "Telegram Escrow Auditor",
+        "version": "3.0.0"
+    }
+
 app.mount("/", StaticFiles(directory="frontend", html=True), name="static")
 
 
