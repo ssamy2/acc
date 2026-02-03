@@ -393,7 +393,25 @@ async function runAudit() {
                     `;
                 }
                 
-                if (actions.terminate_sessions) {
+                // Check for manual session termination (BOT_ONLY mode)
+                const manualSessionIssue = result.issues?.find(i => i.type === 'TERMINATE_SESSIONS_MANUAL');
+                const autoSessionIssue = result.issues?.find(i => i.type === 'TERMINATE_SESSIONS_AUTO');
+                
+                if (manualSessionIssue) {
+                    html += `
+                        <div class="action-needed sessions-manual">
+                            <h4>📱 يجب إنهاء الجلسات يدوياً:</h4>
+                            <ul class="sessions-list">
+                                ${manualSessionIssue.sessions.map(s => `<li>🔴 ${s}</li>`).join('')}
+                            </ul>
+                            <p>⚠️ قيود تيليجرام 24 ساعة - يجب الإنهاء من التطبيق</p>
+                            <ol>
+                                <li>افتح تيليجرام > الإعدادات > الأجهزة</li>
+                                <li>اضغط "إنهاء جميع الجلسات الأخرى"</li>
+                            </ol>
+                        </div>
+                    `;
+                } else if (autoSessionIssue || actions.terminate_sessions) {
                     html += `
                         <div class="action-needed">
                             <button onclick="terminateSessions()" class="btn-secondary">إنهاء الجلسات الأخرى تلقائياً</button>

@@ -110,8 +110,8 @@ async def receive_email_webhook(request: Request):
     Expected JSON payload:
     {
         "from": "sender@telegram.org",
-        "to": "email-for-S12345678@channelsseller.site",
-        "hash": "S12345678",
+        "to": "email-for-<encrypted_hash>@channelsseller.site",
+        "hash": "<encrypted_hash>",
         "subject": "Telegram Login Code",
         "body": "Your verification code is 12345..."
     }

@@ -3,8 +3,17 @@ Security Audit Service
 Audits Telegram accounts for security requirements before transfer
 
 Two Modes Available:
-1. MODE_USER_KEEPS_SESSION: User keeps one session, changes email to ours + we change password
-2. MODE_BOT_ONLY: User exits completely, only bot sessions remain
+1. MODE_BOT_ONLY (Default): 
+   - User sells account, bot receives it
+   - User must terminate sessions MANUALLY (24h Telegram restriction)
+   - Email change is mandatory before transfer
+   - Bot gets full control after transfer
+
+2. MODE_USER_KEEPS_SESSION:
+   - Bot sells account, user receives it
+   - Sessions can be terminated automatically
+   - User keeps one session for receiving the account
+   - Auto session termination is available
 """
 
 from typing import Dict, List, Tuple, Any
@@ -127,7 +136,9 @@ class SecurityAuditService:
         other_count = len(other_sessions)
         
         if mode == TransferMode.MODE_BOT_ONLY:
-            # All other sessions must be terminated
+            # BOT_ONLY mode: Sessions must be terminated MANUALLY by user
+            # Reason: Telegram requires 24h wait before session can be terminated programmatically
+            # User must terminate sessions from their Telegram app
             if other_count > 0:
                 session_details = []
                 for s in other_sessions:
@@ -135,31 +146,41 @@ class SecurityAuditService:
                     session_details.append(detail)
                 
                 issue = {
-                    "type": "TERMINATE_ALL_SESSIONS",
-                    "severity": "action_required",
-                    "title": f"{other_count} other session(s) must be terminated",
-                    "description": "Mode: BOT_ONLY - All user sessions must be terminated",
-                    "action": "Will terminate all other sessions automatically",
+                    "type": "TERMINATE_SESSIONS_MANUAL",
+                    "severity": "blocker",
+                    "title": f"يجب إنهاء {other_count} جلسة يدوياً",
+                    "description": "وضع BOT_ONLY - يجب إنهاء جميع الجلسات من تطبيق تيليجرام (قيود 24 ساعة)",
+                    "action": "اذهب إلى الإعدادات > الأجهزة > إنهاء الجلسات الأخرى",
                     "sessions": session_details,
-                    "auto_fixable": True
+                    "auto_fixable": False  # NOT auto-fixable due to 24h restriction
                 }
                 issues.append(issue)
-                actions_needed["terminate_sessions"] = True
-                log_audit(logger, phone, "Sessions Check (BOT_ONLY)", False, f"{other_count} sessions to terminate")
+                actions_needed["terminate_sessions"] = False  # User must do it manually
+                log_audit(logger, phone, "Sessions Check (BOT_ONLY)", False, f"{other_count} sessions - user must terminate manually")
             else:
                 log_audit(logger, phone, "Sessions Check (BOT_ONLY)", True, "No other sessions")
         
         elif mode == TransferMode.MODE_USER_KEEPS_SESSION:
-            # User can keep sessions, but we still log them
+            # USER_KEEPS_SESSION mode: We can terminate sessions automatically
+            # User is receiving the account, so we have permission to terminate
             if other_count > 0:
                 session_details = []
                 for s in other_sessions:
                     detail = f"{s.get('device_model', 'Unknown')} - {s.get('app_name', 'Unknown')} ({s.get('country', 'Unknown')})"
                     session_details.append(detail)
                 
-                # Info only, not an issue
-                log_audit(logger, phone, "Sessions Check (USER_KEEPS)", True, 
-                         f"{other_count} sessions - user keeps them (mode: USER_KEEPS_SESSION)")
+                issue = {
+                    "type": "TERMINATE_SESSIONS_AUTO",
+                    "severity": "action_required",
+                    "title": f"{other_count} session(s) will be terminated",
+                    "description": "Mode: USER_KEEPS_SESSION - Sessions can be terminated automatically",
+                    "action": "Will terminate other sessions automatically",
+                    "sessions": session_details,
+                    "auto_fixable": True  # Auto-fixable in this mode
+                }
+                issues.append(issue)
+                actions_needed["terminate_sessions"] = True
+                log_audit(logger, phone, "Sessions Check (USER_KEEPS)", False, f"{other_count} sessions to auto-terminate")
             else:
                 log_audit(logger, phone, "Sessions Check (USER_KEEPS)", True, "No other sessions")
         

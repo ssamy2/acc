@@ -258,33 +258,69 @@ async function runAudit() {
                 `;
                 showStatus('يجب تغيير الإيميل أولاً ثم إعادة الفحص', 'warning');
             } else {
-                html = `
-                    <div class="audit-failed">
-                        <div class="icon">✗</div>
-                        <h3>${result.issues_count} issue(s) must be resolved</h3>
-                    </div>
-                    <ul class="issues-list">
-                `;
+                // Check if session termination is required (manual in BOT_ONLY mode)
+                const sessionIssue = result.issues.find(i => i.type === 'TERMINATE_SESSIONS_MANUAL');
                 
-                result.issues.forEach(issue => {
-                    html += `
-                        <li class="issue-item severity-${issue.severity}">
-                            <div class="issue-title">${issue.title}</div>
-                            <div class="issue-desc">${issue.description}</div>
-                            <div class="issue-action">💡 ${issue.action}</div>
-                            ${issue.sessions ? `<div class="issue-sessions">${issue.sessions.join('<br>')}</div>` : ''}
-                        </li>
+                if (sessionIssue) {
+                    html = `
+                        <div class="audit-failed sessions-required">
+                            <div class="icon">📱</div>
+                            <h3>يجب إنهاء الجلسات يدوياً</h3>
+                            <p>وضع BOT_ONLY - قيود تيليجرام 24 ساعة</p>
+                        </div>
+                        <div class="sessions-instructions">
+                            <h4>📱 الجلسات النشطة:</h4>
+                            <ul class="sessions-list">
+                                ${sessionIssue.sessions.map(s => `<li>🔴 ${s}</li>`).join('')}
+                            </ul>
+                            <h4>📝 خطوات إنهاء الجلسات:</h4>
+                            <ol class="session-steps">
+                                <li>افتح تطبيق تيليجرام</li>
+                                <li>اذهب إلى الإعدادات > الأجهزة</li>
+                                <li>اضغط على "إنهاء جميع الجلسات الأخرى"</li>
+                                <li>أو اضغط على كل جلسة واختر "إنهاء"</li>
+                            </ol>
+                            <div class="info-box">
+                                <p>⚠️ <strong>ملاحظة:</strong> تيليجرام يتطلب انتظار 24 ساعة قبل إنهاء الجلسات برمجياً.</p>
+                                <p>يجب إنهاء الجلسات من تطبيق تيليجرام مباشرة.</p>
+                            </div>
+                            <button onclick="runAudit()" class="btn-primary">🔄 إعادة الفحص بعد إنهاء الجلسات</button>
+                        </div>
                     `;
-                });
-                
-                html += '</ul>';
-                html += `
-                    <div class="audit-actions">
-                        <button onclick="terminateSessions()" class="btn-secondary">Terminate Other Sessions Automatically</button>
-                    </div>
-                `;
-                
-                showStatus('Please resolve issues above then re-run audit', 'warning');
+                    showStatus('يجب إنهاء الجلسات يدوياً ثم إعادة الفحص', 'warning');
+                } else {
+                    html = `
+                        <div class="audit-failed">
+                            <div class="icon">✗</div>
+                            <h3>${result.issues_count} مشكلة يجب حلها</h3>
+                        </div>
+                        <ul class="issues-list">
+                    `;
+                    
+                    result.issues.forEach(issue => {
+                        html += `
+                            <li class="issue-item severity-${issue.severity}">
+                                <div class="issue-title">${issue.title}</div>
+                                <div class="issue-desc">${issue.description}</div>
+                                <div class="issue-action">💡 ${issue.action}</div>
+                                ${issue.sessions ? `<div class="issue-sessions">${issue.sessions.join('<br>')}</div>` : ''}
+                            </li>
+                        `;
+                    });
+                    
+                    html += '</ul>';
+                    
+                    // Only show auto-terminate button for USER_KEEPS_SESSION mode
+                    if (result.transfer_mode === 'user_keeps_session') {
+                        html += `
+                            <div class="audit-actions">
+                                <button onclick="terminateSessions()" class="btn-secondary">إنهاء الجلسات تلقائياً</button>
+                            </div>
+                        `;
+                    }
+                    
+                    showStatus('يجب حل المشاكل أعلاه ثم إعادة الفحص', 'warning');
+                }
             }
         }
         
