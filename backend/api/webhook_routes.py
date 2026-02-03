@@ -137,6 +137,10 @@ async def receive_email_webhook(request: Request):
         if not email_hash:
             email_hash = extract_hash_from_email(to_email)
         
+        # Normalize hash to lowercase for consistent storage
+        if email_hash:
+            email_hash = email_hash.lower()
+        
         # Extract verification code
         code = extract_telegram_code(body)
         

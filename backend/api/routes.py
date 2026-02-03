@@ -508,18 +508,21 @@ async def check_email_code(account_id: str, wait_seconds: int = 0):
         if not email_hash:
             raise HTTPException(status_code=400, detail="Email hash not found. Get target email first.")
         
+        # Normalize hash to lowercase for consistent lookup
+        email_hash_lower = email_hash.lower()
+        
         # Wait for code if requested
         code = None
         waited = 0
         while waited < wait_seconds:
-            code = get_code_by_hash(email_hash)
+            code = get_code_by_hash(email_hash_lower)
             if code:
                 break
             await asyncio.sleep(1)
             waited += 1
         
         if not code:
-            code = get_code_by_hash(email_hash)
+            code = get_code_by_hash(email_hash_lower)
         
         logger.info(f"Code check result: {code}")
         
