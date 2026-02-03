@@ -493,43 +493,55 @@ async def check_email_code(account_id: str, wait_seconds: int = 0):
     Check if verification code was received for this account
     Optional: wait up to N seconds for code to arrive
     """
-    phone = account_id
-    account = await get_account(phone)
-    
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    
-    email_hash = account.email_hash
-    if not email_hash:
-        raise HTTPException(status_code=400, detail="Email hash not found. Get target email first.")
-    
-    # Wait for code if requested
-    code = None
-    waited = 0
-    while waited < wait_seconds:
-        code = get_code_by_hash(email_hash)
+    try:
+        phone = account_id
+        logger.info(f"Checking email code for {phone}, wait_seconds={wait_seconds}")
+        
+        account = await get_account(phone)
+        
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        
+        email_hash = account.email_hash
+        logger.info(f"Account found, email_hash={email_hash}")
+        
+        if not email_hash:
+            raise HTTPException(status_code=400, detail="Email hash not found. Get target email first.")
+        
+        # Wait for code if requested
+        code = None
+        waited = 0
+        while waited < wait_seconds:
+            code = get_code_by_hash(email_hash)
+            if code:
+                break
+            await asyncio.sleep(1)
+            waited += 1
+        
+        if not code:
+            code = get_code_by_hash(email_hash)
+        
+        logger.info(f"Code check result: {code}")
+        
         if code:
-            break
-        await asyncio.sleep(1)
-        waited += 1
-    
-    if not code:
-        code = get_code_by_hash(email_hash)
-    
-    if code:
-        return {
-            "status": "received",
-            "account_id": phone,
-            "code": code,
-            "message": "Verification code received"
-        }
-    else:
-        return {
-            "status": "waiting",
-            "account_id": phone,
-            "message": "Code not received yet",
-            "email_hash": email_hash
-        }
+            return {
+                "status": "received",
+                "account_id": phone,
+                "code": code,
+                "message": "Verification code received"
+            }
+        else:
+            return {
+                "status": "waiting",
+                "account_id": phone,
+                "message": "Code not received yet",
+                "email_hash": email_hash
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in check_email_code: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/email/confirm/{account_id}")

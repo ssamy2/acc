@@ -195,7 +195,7 @@ async def receive_email_webhook(request: Request):
 
 
 @router.get("/webhook/code/{email_hash}")
-async def get_code_by_hash(email_hash: str, timeout: int = 60):
+async def get_code_by_hash_endpoint(email_hash: str, timeout: int = 60):
     """
     Get verification code by email hash
     Waits up to 'timeout' seconds for the code to arrive

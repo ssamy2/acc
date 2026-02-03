@@ -38,15 +38,20 @@ async def lifespan(app: FastAPI):
     yield
     
     logger.info("Shutting down...")
-    from backend.api.routes_v2 import pyrogram_manager, telethon_manager
-    
-    if pyrogram_manager:
-        await pyrogram_manager.disconnect_all()
-        logger.info("Pyrogram sessions disconnected")
-    
-    if telethon_manager:
-        await telethon_manager.disconnect_all()
-        logger.info("Telethon sessions disconnected")
+    try:
+        from backend.api.routes import get_pyrogram, get_telethon
+        
+        pyrogram_mgr = get_pyrogram()
+        if pyrogram_mgr:
+            await pyrogram_mgr.disconnect_all()
+            logger.info("Pyrogram sessions disconnected")
+        
+        telethon_mgr = get_telethon()
+        if telethon_mgr:
+            await telethon_mgr.disconnect_all()
+            logger.info("Telethon sessions disconnected")
+    except Exception as e:
+        logger.warning(f"Shutdown warning: {e}")
     
     logger.info("Shutdown complete")
 
