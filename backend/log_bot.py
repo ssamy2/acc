@@ -114,9 +114,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_forwarded(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
-    if context.user_data.get("waiting_channel") and update.message.forward_from_chat:
+    if context.user_data.get("waiting_channel") and update.message.forward_origin:
         global log_channel_id
-        log_channel_id = update.message.forward_from_chat.id
+        if hasattr(update.message.forward_origin, 'chat'):
+            log_channel_id = update.message.forward_origin.chat.id
+        elif hasattr(update.message.forward_origin, 'sender_chat'):
+            log_channel_id = update.message.forward_origin.sender_chat.id
+        else:
+            await update.message.reply_text("❌ Could not detect channel. Please forward a message from the channel.")
+            return
         save_config()
         context.user_data["waiting_channel"] = False
         await update.message.reply_text(f"✅ Channel set: {log_channel_id}\n\nMake sure bot is admin in the channel!")
