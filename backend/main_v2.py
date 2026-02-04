@@ -35,9 +35,25 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized")
     
+    # Start log bot
+    try:
+        from backend.log_bot import init_log_bot
+        await init_log_bot()
+        logger.info("Log bot started")
+    except Exception as e:
+        logger.warning(f"Log bot warning: {e}")
+    
     yield
     
     logger.info("Shutting down...")
+    try:
+        # Stop log bot
+        from backend.log_bot import stop_log_bot
+        await stop_log_bot()
+        logger.info("Log bot stopped")
+    except:
+        pass
+    
     try:
         from backend.api.routes import get_pyrogram, get_telethon
         

