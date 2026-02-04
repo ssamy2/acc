@@ -148,9 +148,9 @@ class SecurityAuditService:
                 issue = {
                     "type": "TERMINATE_SESSIONS_MANUAL",
                     "severity": "blocker",
-                    "title": f"يجب إنهاء {other_count} جلسة يدوياً",
-                    "description": "وضع BOT_ONLY - يجب إنهاء جميع الجلسات من تطبيق تيليجرام (قيود 24 ساعة)",
-                    "action": "اذهب إلى الإعدادات > الأجهزة > إنهاء الجلسات الأخرى",
+                    "title": f"Must terminate {other_count} session(s) manually",
+                    "description": "BOT_ONLY mode - All sessions must be terminated from Telegram app (24h restriction)",
+                    "action": "Go to Settings > Devices > Terminate other sessions",
                     "sessions": session_details,
                     "auto_fixable": False  # NOT auto-fixable due to 24h restriction
                 }

@@ -372,9 +372,9 @@ class PyrogramSessionManager:
             logger.error(f"Error changing 2FA password: {e} (duration: {duration:.2f}s)")
             return {"status": "error", "error": str(e), "duration": duration}
     
-    async def terminate_other_sessions(self, phone: str) -> Dict[str, Any]:
+    async def _terminate_other_sessions_backup(self, phone: str) -> Dict[str, Any]:
         start_time = time.time()
-        logger.info(f"Terminating other sessions for {phone}")
+        logger.info(f"Terminating other sessions for {phone} (backup method)")
         
         client = self.active_clients.get(phone)
         if not client:

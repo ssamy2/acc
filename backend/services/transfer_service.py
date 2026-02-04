@@ -290,7 +290,7 @@ class TransferService:
                 "status": "success",
                 "message": "Password changed successfully",
                 "new_password": new_password,
-                "next_step": "terminate_sessions" if transfer["mode"] == TransferMode.MODE_BOT_ONLY.value else "completed"
+                "next_step": "terminate_sessions" if transfer["mode"] == "bot_only" else "completed"
             }
         else:
             logger.error(f"Password change failed for {phone}: {result.get('error')}")
@@ -315,7 +315,7 @@ class TransferService:
         if not transfer:
             return {"status": "error", "error": "No active transfer for this phone"}
         
-        if transfer["mode"] != TransferMode.MODE_BOT_ONLY.value:
+        if transfer["mode"] != "bot_only":
             logger.info(f"Skipping session termination for {phone} (mode: {transfer['mode']})")
             return {
                 "status": "skipped",

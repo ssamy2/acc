@@ -869,58 +869,6 @@ async def confirm_email_changed(account_id: str):
         }
 
 
-# ============== Telegram Code Fallback ==============
-
-@router.get("/telegram/code/{account_id}")
-async def get_telegram_code_fallback(account_id: str, wait_seconds: int = 5):
-    """
-    Fallback: Get code from Telegram messages (chat 777000) using existing Pyrogram session
-    Used when email code is not received
-    """
-    phone = account_id
-    account = await get_account(phone)
-    
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    
-    manager = get_pyrogram()
-    
-    # Try to get code from Telegram messages
-    code = await manager.get_last_telegram_code(phone)
-    
-    if code:
-        # Send log to bot
-        try:
-            from backend.log_bot import get_bot_app, log_email_code
-            bot_app = get_bot_app()
-            if bot_app:
-                await log_email_code(bot_app, phone, account.telegram_id, code, account.email_hash or "")
-        except:
-            pass
-        
-        return {
-            "status": "found",
-            "code": code,
-            "source": "telegram_messages"
-        }
-    
-    # Wait and retry
-    if wait_seconds > 0:
-        await asyncio.sleep(min(wait_seconds, 10))
-        code = await manager.get_last_telegram_code(phone)
-        if code:
-            return {
-                "status": "found",
-                "code": code,
-                "source": "telegram_messages"
-            }
-    
-    return {
-        "status": "not_found",
-        "message": "No code found in Telegram messages"
-    }
-
-
 # ============== Session Health Endpoints ==============
 
 @router.get("/sessions/health/{account_id}")
