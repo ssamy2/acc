@@ -593,27 +593,76 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         cached_2fa = get_cached_data(phone, "two_fa_password")
         current_2fa_password = request.two_fa_password or cached_2fa
         
-        # Enable/Change 2FA with recovery email (our email)
+        # Get target email and check current recovery email status
         target_email = account.target_email
+        our_domain = "channelsseller.site"
+        
+        # First check if recovery email is already ours
+        security_info = await manager.get_security_info(phone)
+        current_email_pattern = security_info.get("login_email_pattern") or security_info.get("email_unconfirmed_pattern")
+        email_is_ours = current_email_pattern and our_domain in str(current_email_pattern)
+        
+        # Enable/Change 2FA
         if account.has_2fa and current_2fa_password:
-            # Change existing password
             result = await manager.change_2fa_password(
                 phone=phone,
                 current_password=current_2fa_password,
                 new_password=new_password
             )
-            # Also set recovery email if not already set to ours
-            if target_email:
-                try:
-                    await manager.change_recovery_email(phone, new_password, target_email)
-                except:
-                    pass
         else:
-            # Enable new 2FA with our recovery email
-            result = await manager.enable_2fa(phone, new_password, hint="Escrow secure", email=target_email or "")
+            result = await manager.enable_2fa(phone, new_password, hint="", email=target_email or "")
         
         if result.get("status") != "success":
             raise HTTPException(status_code=400, detail=f"Failed to set 2FA: {result.get('error')}")
+        
+        # Now handle recovery email
+        if not email_is_ours and target_email:
+            # Try to change recovery email to ours
+            email_result = await manager.change_recovery_email(phone, new_password, target_email)
+            
+            if email_result.get("status") == "success":
+                # Wait for email code (max 10 seconds)
+                email_hash = account.email_hash
+                code = None
+                
+                for _ in range(10):
+                    await asyncio.sleep(1)
+                    from backend.api.webhook_routes import get_code_by_hash
+                    code = get_code_by_hash(email_hash)
+                    if code:
+                        break
+                
+                if code:
+                    # Confirm email with code
+                    confirm_result = await manager.confirm_recovery_email(phone, code)
+                    if confirm_result.get("status") == "success":
+                        await update_account(phone, email_changed=True, email_verified=True)
+                        logger.info(f"Recovery email confirmed for {phone}")
+                    else:
+                        logger.warning(f"Failed to confirm email for {phone}: {confirm_result.get('error')}")
+                else:
+                    # No code received - user must change email manually
+                    raise HTTPException(
+                        status_code=400, 
+                        detail={
+                            "error": "EMAIL_CHANGE_REQUIRED",
+                            "message": "Could not automatically change recovery email. Please change it manually to: " + target_email,
+                            "target_email": target_email,
+                            "action": "Go to Telegram Settings > Privacy & Security > Two-Step Verification > Recovery Email and change it to our email, then try again."
+                        }
+                    )
+            else:
+                # Failed to initiate email change - user must do it manually
+                raise HTTPException(
+                    status_code=400, 
+                    detail={
+                        "error": "EMAIL_CHANGE_REQUIRED",
+                        "message": "Could not change recovery email. Please change it manually to: " + target_email,
+                        "target_email": target_email,
+                        "action": "Go to Telegram Settings > Privacy & Security > Two-Step Verification > Recovery Email and change it to our email, then try again.",
+                        "technical_error": email_result.get("error")
+                    }
+                )
         
         # Send log to bot
         try:
