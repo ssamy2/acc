@@ -4,13 +4,14 @@
 
 ## 🚀 المميزات
 
-- ✅ تشفير الهاش للإيميلات (HMAC-SHA256)
+- ✅ جلب Recovery Email ديناميكياً من Telegram (لا يُخزّن)
+- ✅ تشفير الهاش للإيميلات (S+TelegramID → HMAC-SHA256)
 - ✅ وضعين للتحويل (bot_only / user_keeps_session)
-- ✅ إدارة الإيميل والتحقق من الكود
-- ✅ مراقبة صحة الجلسات
-- ✅ نظام التسليم مع fallback تلقائي
+- ✅ فحص Session صحيح باتصال حقيقي
+- ✅ استخراج الكود من Subject و Body
+- ✅ Modular Architecture (auth, sessions, admin, delivery)
+- ✅ Log Bot للإشعارات على Telegram
 - ✅ Migration تلقائي للداتابيز
-- ✅ صفحة استلام للمشتري
 
 ## 📦 التثبيت
 
@@ -125,25 +126,43 @@ GET  /api3/webhook/health
 acc/
 ├── backend/
 │   ├── api/
-│   │   ├── routes_v3.py       # API الرئيسي
-│   │   └── webhook_routes.py  # Email webhook
+│   │   ├── routes.py          # Legacy API (v1)
+│   │   ├── auth.py            # Authentication endpoints
+│   │   ├── sessions.py        # Session management + dynamic recovery email
+│   │   ├── admin.py           # Admin dashboard endpoints
+│   │   ├── delivery.py        # Delivery flow endpoints
+│   │   └── webhook_routes.py  # Email webhook (subject + body extraction)
 │   ├── core_engine/
-│   │   ├── pyrogram_client.py
-│   │   ├── telethon_client.py
+│   │   ├── pyrogram_client.py # Pyrogram session manager
+│   │   ├── telethon_client.py # Telethon session manager
 │   │   └── credentials_logger.py
 │   ├── models/
-│   │   └── database.py
-│   └── services/
-│       ├── security_audit.py
-│       └── delivery_service.py
+│   │   └── database.py        # SQLAlchemy models
+│   ├── services/
+│   │   └── security_audit.py
+│   └── log_bot.py             # Telegram notification bot
 ├── frontend/
-│   ├── index_v3.html          # الصفحة الرئيسية
-│   ├── receive.html           # صفحة الاستلام
-│   ├── app_v3.js
+│   ├── index_main.html        # الصفحة الرئيسية
+│   ├── receive.html           # صفحة الاستلام (+ live recovery email)
 │   └── style_v3.css
-├── migrate_all_columns.py     # Migration تلقائي
-├── run_v2.py                  # نقطة التشغيل
+├── run_v2.py                  # Entry point
 └── requirements.txt
+```
+
+## 🔄 Recovery Email Flow
+
+```
+1. Frontend يعرض الحساب
+2. API يجلب recovery email مباشرة من Telegram
+3. لا يتم تخزين الإيميل في قاعدة البيانات
+4. يتم عرض الإيميل الحالي مع حالته (confirmed/pending/none)
+```
+
+## 📧 Email Hash Logic
+
+```
+Hash = HMAC-SHA256("S" + telegram_id, secret_key)
+Email = email-for-{hash}@channelsseller.site
 ```
 
 ## 🐛 حل المشاكل

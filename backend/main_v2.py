@@ -11,6 +11,10 @@ from contextlib import asynccontextmanager
 
 from backend.api.routes import router as api_router
 from backend.api.webhook_routes import router as webhook_router
+from backend.api.auth import router as auth_router
+from backend.api.sessions import router as sessions_router
+from backend.api.admin import router as admin_router
+from backend.api.delivery import router as delivery_router
 from backend.models.database import init_db
 from backend.core_engine.logger import get_logger
 
@@ -96,6 +100,10 @@ app.add_middleware(
 
 app.include_router(api_router)
 app.include_router(webhook_router)
+app.include_router(auth_router, prefix="/api/v2")
+app.include_router(sessions_router, prefix="/api/v2")
+app.include_router(admin_router, prefix="/api/v2")
+app.include_router(delivery_router, prefix="/api/v2")
 
 @app.get("/")
 async def root():

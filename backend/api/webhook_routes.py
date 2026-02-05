@@ -56,41 +56,32 @@ class EmailPayload(BaseModel):
     timestamp: Optional[str] = None
 
 
-def extract_telegram_code(body: str) -> Optional[str]:
-    """
-    Extract 5-6 digit Telegram verification code from email body
-    Supports multiple languages with intelligent pattern matching
-    """
-    
-    # Multi-language patterns for Telegram codes
-    # Priority order: specific patterns first, then generic fallbacks
+def extract_telegram_code(text: str) -> Optional[str]:
+    """Extract 5-6 digit Telegram verification code from text"""
     patterns = [
-        # Pattern 1: Language-specific "code/رمز/код" keywords followed by digits
-        # Covers: English, Arabic (رمز/رمزك/كود/كودك), Russian (код), Persian, Turkish, etc.
-        r'(?:code|verification\s+code|login\s+code|код|رمز[كک]?|كود[كک]?|código|codice|code de vérification|验证码|驗證碼|認証コード|인증\s*코드|código de verificação|Bestätigungscode|código de verificación|codice di verifica|कोड|código|mã xác nhận)[\s:：]*[^\d]*?(\d{5,6})',
-        
-        # Pattern 2: Digits followed by "is your code" in multiple languages
-        r'(\d{5,6})[\s\-–—]*(?:is your|هو رمز|это ваш|é o seu|est votre|is je|är din|ist dein|es tu|è il tuo|あなたの|당신의|是您的|是你的)',
-        
-        # Pattern 3: Subject line pattern - "Your code is: 12345"
-        r'(?:your|tu|votre|dein|su|あなたの|당신의|您的)[\s\w]*(?:code|код|رمز|código|codice)[\s:：]*(\d{5,6})',
-        
-        # Pattern 4: Standalone 5-6 digit number (last resort)
-        # Only match if surrounded by whitespace or punctuation to avoid false positives
-        r'(?:^|[\s\n\r.!?:：،。！？])\s*(\d{5,6})(?=[\s\n\r.!?:：،。！？]|$)',
+        r'(?:code|verification\s+code|login\s+code|код|رمز|كود|código)[\s:：]*[^\d]*?(\d{5,6})',
+        r'(\d{5,6})[\s\-–—]*(?:is your|هو رمز|это ваш)',
+        r'(?:your|tu|votre)[\s\w]*(?:code|код|رمز)[\s:：]*(\d{5,6})',
+        r'(?:^|[\s\n\r.!?:：])\s*(\d{5,6})(?=[\s\n\r.!?:：]|$)',
     ]
     
     for pattern in patterns:
-        match = re.search(pattern, body, re.IGNORECASE | re.UNICODE | re.MULTILINE)
+        match = re.search(pattern, text, re.IGNORECASE | re.UNICODE | re.MULTILINE)
         if match:
             code = match.group(1)
-            # Verify it's a valid code length
-            if len(code) in [5, 6]:
-                # Additional validation: ensure it's not all zeros
-                # Allow sequential numbers as they can be valid codes
-                if not (code == '00000' or code == '000000'):
-                    return code
-    
+            if len(code) in [5, 6] and code not in ['00000', '000000']:
+                return code
+    return None
+
+
+def extract_code_from_email(subject: str, body: str) -> Optional[str]:
+    """Extract code from both subject and body - checks subject first"""
+    if subject:
+        code = extract_telegram_code(subject)
+        if code:
+            return code
+    if body:
+        return extract_telegram_code(body)
     return None
 
 
@@ -141,8 +132,8 @@ async def receive_email_webhook(request: Request):
         if email_hash:
             email_hash = email_hash.lower()
         
-        # Extract verification code
-        code = extract_telegram_code(body)
+        # Extract verification code from subject and body
+        code = extract_code_from_email(subject, body)
         
         if code:
             logger.info(f"✅ Code {code} extracted for hash: {email_hash}")

