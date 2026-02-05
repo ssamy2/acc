@@ -1,6 +1,9 @@
 """
 Session Management API Routes
-Handles: session health check, session info, recovery email (dynamic fetch)
+Handles: session health check, session info, emails (dynamic fetch)
+Distinguishes between:
+- Login Email: Email used to login (alternative to phone)
+- Recovery Email: Email used to reset 2FA password
 """
 
 import time
@@ -10,6 +13,7 @@ from fastapi import APIRouter, HTTPException
 
 from backend.core_engine.logger import get_logger
 from backend.core_engine.pyrogram_client import get_session_manager
+from backend.core_engine.telethon_client import get_telethon_manager
 from backend.models.database import get_account, update_account
 
 logger = get_logger("SessionsAPI")
@@ -17,30 +21,27 @@ router = APIRouter(tags=["Sessions"])
 
 API_ID = 28907635
 API_HASH = "fa6c3335de68283781976ae20f813f73"
+OUR_DOMAIN = "channelsseller.site"
 
 
 def get_pyrogram():
     return get_session_manager(API_ID, API_HASH, "sessions")
 
 
-async def check_session_health(phone: str) -> Dict[str, Any]:
-    """
-    Check session health by attempting real connection to Telegram.
-    Returns actual session status, not just database flags.
-    """
+def get_telethon():
+    return get_telethon_manager(API_ID, API_HASH)
+
+
+async def check_pyrogram_health(phone: str) -> Dict[str, Any]:
+    """Check Pyrogram session with real connection"""
     manager = get_pyrogram()
     
     try:
         me_info = await manager.get_me_info(phone)
         if me_info.get("status") == "success":
-            return {
-                "status": "active",
-                "telegram_id": me_info.get("id"),
-                "first_name": me_info.get("first_name"),
-                "username": me_info.get("username")
-            }
-    except Exception as e:
-        logger.warning(f"Session check failed for {phone}: {e}")
+            return {"active": True, "user_id": me_info.get("id"), "type": "pyrogram"}
+    except:
+        pass
     
     account = await get_account(phone)
     if account and account.pyrogram_session:
@@ -49,84 +50,117 @@ async def check_session_health(phone: str) -> Dict[str, Any]:
             if connected:
                 me_info = await manager.get_me_info(phone)
                 if me_info.get("status") == "success":
-                    return {
-                        "status": "active",
-                        "telegram_id": me_info.get("id"),
-                        "reconnected": True
-                    }
-        except Exception as e:
-            logger.error(f"Reconnection failed for {phone}: {e}")
+                    return {"active": True, "user_id": me_info.get("id"), "reconnected": True, "type": "pyrogram"}
+        except:
+            pass
     
-    return {"status": "inactive", "reason": "Cannot connect to Telegram"}
+    return {"active": False, "type": "pyrogram", "error": "Session dead"}
 
 
-async def get_recovery_email_dynamic(phone: str) -> Dict[str, Any]:
+async def check_telethon_health(phone: str) -> Dict[str, Any]:
+    """Check Telethon session with real connection"""
+    manager = get_telethon()
+    
+    try:
+        client = manager.active_clients.get(phone)
+        if client and await client.is_user_authorized():
+            me = await client.get_me()
+            return {"active": True, "user_id": me.id, "type": "telethon"}
+    except:
+        pass
+    
+    account = await get_account(phone)
+    if account and account.telethon_session:
+        try:
+            connected = await manager.connect_from_string(phone, account.telethon_session)
+            if connected:
+                client = manager.active_clients.get(phone)
+                if client:
+                    me = await client.get_me()
+                    return {"active": True, "user_id": me.id, "reconnected": True, "type": "telethon"}
+        except:
+            pass
+    
+    return {"active": False, "type": "telethon", "error": "Session dead"}
+
+
+async def get_account_emails_live(phone: str) -> Dict[str, Any]:
     """
-    Fetch current recovery email directly from Telegram account settings.
-    This is called dynamically, NOT stored in database.
+    Get ALL email info from Telegram (dynamic fetch):
+    - login_email: Email used to login (alternative to phone number)
+    - recovery_email: Email used to reset 2FA password (pattern only, full email hidden)
+    - pending_email: Email waiting for confirmation
     """
     manager = get_pyrogram()
     
     try:
-        security_info = await manager.get_security_info(phone)
+        security = await manager.get_security_info(phone)
         
-        if security_info.get("status") != "success":
+        if security.get("status") != "success":
             return {"status": "error", "error": "Failed to get security info"}
         
-        current_email = None
-        email_status = "none"
-        
-        if security_info.get("login_email_pattern"):
-            current_email = security_info["login_email_pattern"]
-            email_status = "confirmed"
-        elif security_info.get("email_unconfirmed_pattern"):
-            current_email = security_info["email_unconfirmed_pattern"]
-            email_status = "pending_confirmation"
-        elif security_info.get("has_recovery_email"):
-            email_status = "set_but_hidden"
-        
-        return {
+        result = {
             "status": "success",
-            "current_recovery_email": current_email,
-            "email_status": email_status,
-            "has_2fa": security_info.get("has_password", False),
-            "has_recovery": security_info.get("has_recovery_email", False)
+            "has_2fa": security.get("has_password", False),
+            "login_email": security.get("login_email_pattern"),
+            "login_email_status": "none",
+            "pending_email": security.get("email_unconfirmed_pattern"),
+            "has_recovery_email": security.get("has_recovery_email", False),
+            "password_hint": security.get("password_hint"),
+            "sessions_count": security.get("other_sessions_count", 0) + 1
         }
         
+        if security.get("login_email_pattern"):
+            result["login_email_status"] = "confirmed"
+            result["is_our_login_email"] = OUR_DOMAIN in str(security["login_email_pattern"])
+        elif security.get("email_unconfirmed_pattern"):
+            result["login_email_status"] = "pending"
+            result["is_our_login_email"] = OUR_DOMAIN in str(security["email_unconfirmed_pattern"])
+        else:
+            result["is_our_login_email"] = False
+        
+        return result
+        
     except Exception as e:
-        logger.error(f"Error fetching recovery email for {phone}: {e}")
+        logger.error(f"Error fetching emails for {phone}: {e}")
         return {"status": "error", "error": str(e)}
 
 
 @router.get("/sessions/health/{account_id}")
 async def get_session_health(account_id: str):
-    """Check if session is active by real connection attempt"""
+    """Check BOTH Pyrogram and Telethon sessions with real connection"""
     phone = account_id
     
     account = await get_account(phone)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     
-    health = await check_session_health(phone)
+    pyrogram = await check_pyrogram_health(phone)
+    telethon = await check_telethon_health(phone)
     
     await update_account(
         phone,
-        pyrogram_healthy=(health["status"] == "active"),
+        pyrogram_healthy=pyrogram["active"],
+        telethon_healthy=telethon["active"],
         last_session_check=datetime.utcnow()
     )
     
     return {
         "status": "success",
         "account_id": phone,
-        "session_health": health
+        "pyrogram": pyrogram,
+        "telethon": telethon,
+        "both_active": pyrogram["active"] and telethon["active"]
     }
 
 
-@router.get("/sessions/recovery-email/{account_id}")
-async def get_recovery_email(account_id: str):
+@router.get("/sessions/emails/{account_id}")
+async def get_account_emails(account_id: str):
     """
-    Get current recovery email directly from Telegram (dynamic fetch).
-    Does NOT read from database - always fetches live data.
+    Get ALL emails from Telegram (dynamic - NOT stored):
+    - login_email: Used for login instead of phone
+    - recovery_email: Used to reset 2FA password
+    - pending_email: Waiting confirmation
     """
     phone = account_id
     
@@ -134,53 +168,65 @@ async def get_recovery_email(account_id: str):
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     
-    email_info = await get_recovery_email_dynamic(phone)
+    emails = await get_account_emails_live(phone)
     
-    if email_info.get("status") != "success":
-        raise HTTPException(status_code=400, detail=email_info.get("error", "Failed to fetch"))
-    
-    our_domain = "channelsseller.site"
-    is_our_email = False
-    if email_info.get("current_recovery_email"):
-        is_our_email = our_domain in str(email_info["current_recovery_email"])
-    
-    return {
-        "status": "success",
-        "account_id": phone,
-        "current_recovery_email": email_info.get("current_recovery_email"),
-        "email_status": email_info.get("email_status"),
-        "is_our_email": is_our_email,
-        "target_email": account.target_email,
-        "has_2fa": email_info.get("has_2fa"),
-        "has_recovery": email_info.get("has_recovery")
-    }
-
-
-@router.get("/sessions/info/{account_id}")
-async def get_session_info(account_id: str):
-    """Get full session info including dynamic recovery email"""
-    phone = account_id
-    
-    account = await get_account(phone)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    
-    health = await check_session_health(phone)
-    email_info = await get_recovery_email_dynamic(phone)
-    
-    manager = get_pyrogram()
-    security_info = await manager.get_security_info(phone)
+    if emails.get("status") != "success":
+        raise HTTPException(status_code=400, detail=emails.get("error"))
     
     return {
         "status": "success",
         "account_id": phone,
         "telegram_id": account.telegram_id,
-        "session_status": health["status"],
-        "has_pyrogram_session": account.pyrogram_session is not None,
-        "has_telethon_session": account.telethon_session is not None,
-        "current_recovery_email": email_info.get("current_recovery_email"),
-        "email_status": email_info.get("email_status"),
-        "has_2fa": security_info.get("has_password", False),
-        "other_sessions_count": security_info.get("other_sessions_count", 0),
-        "target_email": account.target_email
+        "login_email": emails.get("login_email"),
+        "login_email_status": emails.get("login_email_status"),
+        "pending_email": emails.get("pending_email"),
+        "has_recovery_email": emails.get("has_recovery_email"),
+        "is_our_login_email": emails.get("is_our_login_email"),
+        "target_email": account.target_email,
+        "has_2fa": emails.get("has_2fa"),
+        "sessions_count": emails.get("sessions_count")
+    }
+
+
+@router.get("/sessions/info/{account_id}")
+async def get_session_info(account_id: str):
+    """Get comprehensive session info with both sessions and emails"""
+    phone = account_id
+    
+    account = await get_account(phone)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    pyrogram = await check_pyrogram_health(phone)
+    telethon = await check_telethon_health(phone)
+    emails = await get_account_emails_live(phone)
+    
+    mode = account.transfer_mode.value if account.transfer_mode else "bot_only"
+    expected_sessions = 1 if mode == "bot_only" else 2
+    
+    return {
+        "status": "success",
+        "account_id": phone,
+        "telegram_id": account.telegram_id,
+        "transfer_mode": mode,
+        "sessions": {
+            "pyrogram": pyrogram,
+            "telethon": telethon,
+            "both_active": pyrogram["active"] and telethon["active"],
+            "total_count": emails.get("sessions_count", 0),
+            "expected": expected_sessions,
+            "has_extra": emails.get("sessions_count", 0) > expected_sessions
+        },
+        "emails": {
+            "login_email": emails.get("login_email"),
+            "login_email_status": emails.get("login_email_status"),
+            "pending_email": emails.get("pending_email"),
+            "has_recovery_email": emails.get("has_recovery_email"),
+            "is_our_email": emails.get("is_our_login_email"),
+            "target_email": account.target_email
+        },
+        "security": {
+            "has_2fa": emails.get("has_2fa", False),
+            "password_hint": emails.get("password_hint")
+        }
     }

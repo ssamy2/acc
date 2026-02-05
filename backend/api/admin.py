@@ -13,7 +13,7 @@ from backend.models.database import (
     AuthStatus, DeliveryStatus, TransferMode,
     get_account, update_account, async_session, Account
 )
-from backend.api.sessions import check_session_health, get_recovery_email_dynamic
+from backend.api.sessions import check_pyrogram_health, check_telethon_health, get_account_emails_live
 from sqlalchemy import select
 
 logger = get_logger("AdminAPI")
@@ -85,21 +85,16 @@ async def get_all_accounts():
 
 @router.get("/account/{account_id}")
 async def get_account_details(account_id: str):
-    """Get account details with live session check and recovery email"""
+    """Get account details with live session check and emails"""
     phone = account_id
     account = await get_account(phone)
     
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     
-    session_health = await check_session_health(phone)
-    email_info = await get_recovery_email_dynamic(phone)
-    
-    our_domain = "channelsseller.site"
-    is_our_email = False
-    current_email = email_info.get("current_recovery_email")
-    if current_email:
-        is_our_email = our_domain in str(current_email)
+    pyrogram = await check_pyrogram_health(phone)
+    telethon = await check_telethon_health(phone)
+    emails = await get_account_emails_live(phone)
     
     return {
         "status": "success",
@@ -111,15 +106,19 @@ async def get_account_details(account_id: str):
             "password": account.generated_password,
             "target_email": account.target_email,
             "email_hash": account.email_hash,
-            "email_changed": account.email_changed or False,
-            "has_2fa": account.has_2fa or False,
+            "has_2fa": emails.get("has_2fa", False),
             "audit_passed": account.audit_passed or False,
             "has_pyrogram_session": account.pyrogram_session is not None,
             "has_telethon_session": account.telethon_session is not None,
-            "session_status": session_health["status"],
-            "current_recovery_email": current_email,
-            "email_status": email_info.get("email_status"),
-            "is_our_email": is_our_email,
+            "pyrogram_status": "active" if pyrogram["active"] else "inactive",
+            "telethon_status": "active" if telethon["active"] else "inactive",
+            "session_status": "active" if pyrogram["active"] and telethon["active"] else "inactive",
+            "login_email": emails.get("login_email"),
+            "login_email_status": emails.get("login_email_status"),
+            "pending_email": emails.get("pending_email"),
+            "has_recovery_email": emails.get("has_recovery_email"),
+            "is_our_email": emails.get("is_our_login_email", False),
+            "sessions_count": emails.get("sessions_count", 0),
             "delivery_status": account.delivery_status.value if account.delivery_status else None,
             "delivery_count": account.delivery_count or 0,
             "created_at": account.created_at.isoformat() if account.created_at else None,

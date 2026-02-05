@@ -421,8 +421,7 @@
                 
                 const emailStatusText = {
                     'confirmed': '✅ مؤكد',
-                    'pending_confirmation': '⏳ بانتظار التأكيد',
-                    'set_but_hidden': '🔒 مخفي',
+                    'pending': '⏳ بانتظار التأكيد',
                     'none': '❌ غير موجود'
                 };
                 
@@ -443,20 +442,45 @@
                         <span class="label">كلمة المرور:</span>
                         <span class="value">${acc.password || '-'} ${acc.password ? `<button class="copy-btn" onclick="copyText('${acc.password}')">📋</button>` : ''}</span>
                     </div>
+                    
                     <hr style="margin: 10px 0; border-color: #0088cc;">
-                    <h4 style="color: #0088cc; margin: 10px 0;">📧 Recovery Email (Live):</h4>
+                    <h4 style="color: #0088cc; margin: 10px 0;">� Sessions (Live):</h4>
+                    <div class="detail-row">
+                        <span class="label">Pyrogram:</span>
+                        <span class="value">${acc.pyrogram_status === 'active' ? '🟢 نشط' : '🔴 غير نشط'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Telethon:</span>
+                        <span class="value">${acc.telethon_status === 'active' ? '🟢 نشط' : '🔴 غير نشط'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">عدد الجلسات:</span>
+                        <span class="value">${acc.sessions_count || 0}</span>
+                    </div>
+                    
+                    <hr style="margin: 10px 0; border-color: #28a745;">
+                    <h4 style="color: #28a745; margin: 10px 0;">📧 Emails (Live):</h4>
                     <div class="detail-row" style="background: ${acc.is_our_email ? '#d4edda' : '#fff3cd'};">
-                        <span class="label">الإيميل الحالي:</span>
-                        <span class="value">${acc.current_recovery_email || 'غير موجود'} ${acc.is_our_email ? '✅' : '⚠️'}</span>
+                        <span class="label">Login Email:</span>
+                        <span class="value">${acc.login_email || 'غير موجود'} ${acc.is_our_email ? '✅' : '⚠️'}</span>
                     </div>
                     <div class="detail-row">
                         <span class="label">حالة الإيميل:</span>
-                        <span class="value">${emailStatusText[acc.email_status] || acc.email_status || '-'}</span>
+                        <span class="value">${emailStatusText[acc.login_email_status] || acc.login_email_status || '-'}</span>
+                    </div>
+                    ${acc.pending_email ? `<div class="detail-row" style="background: #fff3cd;">
+                        <span class="label">إيميل معلق:</span>
+                        <span class="value">${acc.pending_email} ⏳</span>
+                    </div>` : ''}
+                    <div class="detail-row">
+                        <span class="label">Recovery Email:</span>
+                        <span class="value">${acc.has_recovery_email ? '✅ موجود' : '❌ غير موجود'}</span>
                     </div>
                     <div class="detail-row">
                         <span class="label">إيميلنا المستهدف:</span>
                         <span class="value">${acc.target_email || '-'}</span>
                     </div>
+                    
                     <hr style="margin: 10px 0;">
                     <div class="detail-row">
                         <span class="label">2FA:</span>
@@ -465,14 +489,6 @@
                     <div class="detail-row">
                         <span class="label">اجتاز الفحص:</span>
                         <span class="value">${acc.audit_passed ? '✅ نعم' : '❌ لا'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="label">Pyrogram Session:</span>
-                        <span class="value">${acc.has_pyrogram_session ? '✅ موجود' : '❌ غير موجود'}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="label">حالة الجلسة:</span>
-                        <span class="value">${acc.session_status === 'active' ? '🟢 نشط' : '🔴 غير نشط'}</span>
                     </div>
                     <div class="detail-row">
                         <span class="label">عدد التسليمات:</span>

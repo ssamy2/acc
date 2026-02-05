@@ -15,6 +15,7 @@ from backend.api.auth import router as auth_router
 from backend.api.sessions import router as sessions_router
 from backend.api.admin import router as admin_router
 from backend.api.delivery import router as delivery_router
+from backend.api.audit import router as audit_router
 from backend.models.database import init_db
 from backend.core_engine.logger import get_logger
 
@@ -104,6 +105,7 @@ app.include_router(auth_router, prefix="/api/v2")
 app.include_router(sessions_router, prefix="/api/v2")
 app.include_router(admin_router, prefix="/api/v2")
 app.include_router(delivery_router, prefix="/api/v2")
+app.include_router(audit_router, prefix="/api/v2")
 
 @app.get("/")
 async def root():
@@ -115,6 +117,11 @@ async def dashboard():
 
 @app.get("/receive")
 async def receive_page():
+    return FileResponse("frontend/receive.html")
+
+@app.get("/receive-delivery")
+async def receive_delivery_page(phone: str = None):
+    """Delivery page with phone parameter"""
     return FileResponse("frontend/receive.html")
 
 @app.get("/health")
