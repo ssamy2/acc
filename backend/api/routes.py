@@ -555,7 +555,7 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             clear_session_cache(phone)
             raise HTTPException(
                 status_code=408, 
-                detail="انتهت المهلة (30 دقيقة). يرجى البدء من جديد. تم حفظ الجلسة احتياطياً."
+                detail="Session expired (30 minutes). Please start over. Session saved as backup."
             )
         
         account = await get_account(phone)
@@ -566,6 +566,7 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             raise HTTPException(status_code=400, detail="Audit not passed. Run audit first.")
         
         manager = get_pyrogram()
+        from backend.core_engine.pyrogram_client import pattern_matches_email
         
         # Generate strong password
         new_password = generate_strong_password(24)
@@ -574,72 +575,48 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         cached_2fa = get_cached_data(phone, "two_fa_password")
         current_2fa_password = request.two_fa_password or cached_2fa
         
-        # Get target email and check current recovery email status
         target_email = account.target_email
+        email_hash = account.email_hash
         
-        # Check if recovery email is already ours using full email (with password)
+        # Step 1: Check current 2FA status
         security_info = await manager.get_security_info(phone, known_password=current_2fa_password)
-        recovery_email_full = security_info.get("recovery_email_full")
-        email_unconfirmed = security_info.get("email_unconfirmed_pattern")
+        has_password = security_info.get("has_password", False)
         
-        # Determine if recovery email is ours
-        email_is_ours = False
-        if recovery_email_full and EMAIL_DOMAIN in recovery_email_full.lower():
-            email_is_ours = True
-        elif email_unconfirmed and EMAIL_DOMAIN in str(email_unconfirmed).lower():
-            email_is_ours = True  # Pending but it's ours
-        
-        # Enable/Change 2FA
-        if account.has_2fa and current_2fa_password:
+        # Step 2: Enable or change 2FA password
+        if has_password and current_2fa_password:
+            # 2FA already enabled - change password to ours
             result = await manager.change_2fa_password(
                 phone=phone,
                 current_password=current_2fa_password,
                 new_password=new_password
             )
         else:
+            # 2FA disabled - enable it with our password + recovery email
             result = await manager.enable_2fa(phone, new_password, hint="", email=target_email or "")
+            logger.info(f"2FA was disabled for {phone}, enabling with our password + recovery email")
         
         if result.get("status") != "success":
             raise HTTPException(status_code=400, detail=f"Failed to set 2FA: {result.get('error')}")
         
-        # Now handle recovery email
+        # Step 3: Re-check recovery email status (now using OUR new password)
+        security_info2 = await manager.get_security_info(phone, known_password=new_password)
+        recovery_email_full = security_info2.get("recovery_email_full")
+        email_unconfirmed = security_info2.get("email_unconfirmed_pattern")
+        
+        email_is_ours = False
+        if recovery_email_full and EMAIL_DOMAIN in recovery_email_full.lower():
+            email_is_ours = True
+        elif email_unconfirmed and EMAIL_DOMAIN in str(email_unconfirmed).lower():
+            email_is_ours = True  # Pending confirmation but it's ours
+        elif email_unconfirmed and target_email and pattern_matches_email(email_unconfirmed, target_email):
+            email_is_ours = True  # Pattern matches our expected email
+        
+        # Step 4: If email not ours yet, change it
         if not email_is_ours and target_email:
-            # Try to change recovery email to ours
             email_result = await manager.change_recovery_email(phone, new_password, target_email)
             
-            if email_result.get("status") == "success":
-                # Wait for email code (max 10 seconds)
-                email_hash = account.email_hash
-                code = None
-                
-                for _ in range(10):
-                    await asyncio.sleep(1)
-                    from backend.api.webhook_routes import get_code_by_hash
-                    code = get_code_by_hash(email_hash)
-                    if code:
-                        break
-                
-                if code:
-                    # Confirm email with code
-                    confirm_result = await manager.confirm_recovery_email(phone, code)
-                    if confirm_result.get("status") == "success":
-                        await update_account(phone, email_changed=True, email_verified=True)
-                        logger.info(f"Recovery email confirmed for {phone}")
-                    else:
-                        logger.warning(f"Failed to confirm email for {phone}: {confirm_result.get('error')}")
-                else:
-                    # No code received - user must change email manually
-                    raise HTTPException(
-                        status_code=400, 
-                        detail={
-                            "error": "EMAIL_CHANGE_REQUIRED",
-                            "message": "Could not automatically change recovery email. Please change it manually to: " + target_email,
-                            "target_email": target_email,
-                            "action": "Go to Telegram Settings > Privacy & Security > Two-Step Verification > Recovery Email and change it to our email, then try again."
-                        }
-                    )
-            else:
-                # Failed to initiate email change - user must do it manually
+            if email_result.get("status") != "success":
+                logger.warning(f"Failed to change recovery email for {phone}: {email_result.get('error')}")
                 raise HTTPException(
                     status_code=400, 
                     detail={
@@ -650,6 +627,35 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
                         "technical_error": email_result.get("error")
                     }
                 )
+        
+        # Step 5: Wait for email confirmation code and auto-confirm
+        # (applies when email was just set via enable_2fa or change_recovery_email)
+        # Re-check: is email confirmed or pending?
+        security_info3 = await manager.get_security_info(phone, known_password=new_password)
+        email_unconfirmed_now = security_info3.get("email_unconfirmed_pattern")
+        
+        if email_unconfirmed_now and target_email:
+            # Email is pending confirmation - wait for code via webhook
+            logger.info(f"Recovery email pending confirmation for {phone}, waiting for code...")
+            code = None
+            
+            for _ in range(15):
+                await asyncio.sleep(1)
+                from backend.api.webhook_routes import get_code_by_hash
+                code = get_code_by_hash(email_hash)
+                if code:
+                    break
+            
+            if code:
+                confirm_result = await manager.confirm_recovery_email(phone, code)
+                if confirm_result.get("status") == "success":
+                    await update_account(phone, email_changed=True, email_verified=True)
+                    logger.info(f"Recovery email auto-confirmed for {phone}")
+                else:
+                    logger.warning(f"Failed to confirm email for {phone}: {confirm_result.get('error')}")
+            else:
+                logger.warning(f"No email code received within 15s for {phone} - continuing without confirmation")
+                # Don't block finalize - email can be confirmed later
         
         # Send log to bot
         try:
@@ -970,7 +976,12 @@ async def confirm_recovery_email_with_code(account_id: str, request: ConfirmCode
 @router.post("/email/confirm/{account_id}")
 async def confirm_email_changed(account_id: str):
     """
-    Confirm that user has changed their email and verify it
+    Confirm that user has changed their recovery email and verify it.
+    Uses multiple matching strategies:
+    1. Full email from account.getPasswordSettings (if password known)
+    2. Domain check on email_unconfirmed_pattern
+    3. Pattern matching on masked emails (em***k@domain.com)
+    4. Login email pattern check (separate from recovery email)
     """
     phone = account_id
     account = await get_account(phone)
@@ -979,41 +990,90 @@ async def confirm_email_changed(account_id: str):
         raise HTTPException(status_code=404, detail="Account not found")
     
     manager = get_pyrogram()
+    from backend.core_engine.pyrogram_client import pattern_matches_email
     our_email = account.target_email or ""
     
     # Try to get known password for full email check
     known_password = get_cached_data(phone, "two_fa_password") or account.generated_password
+    
+    # Connect if needed
+    if phone not in manager.active_clients and account.pyrogram_session:
+        try:
+            await manager.connect_from_string(phone, account.pyrogram_session)
+        except:
+            pass
     
     # Get current security info to verify email change
     security_info = await manager.get_security_info(phone, known_password=known_password)
     if security_info.get("status") == "error":
         raise HTTPException(status_code=400, detail=security_info.get("error"))
     
-    # Check recovery email status
+    # Extract all email fields
     recovery_email_full = security_info.get("recovery_email_full")
     email_unconfirmed = security_info.get("email_unconfirmed_pattern")
+    login_email_pattern = security_info.get("login_email_pattern")
     has_recovery = security_info.get("has_recovery_email", False)
+    has_password = security_info.get("has_password", False)
     
     email_matches = False
     email_status = "unknown"
     current_display = ""
+    match_method = ""
     
+    # Strategy 1: Full recovery email (from getPasswordSettings with password)
     if recovery_email_full:
         current_display = recovery_email_full
         if EMAIL_DOMAIN in recovery_email_full.lower():
             email_matches = True
             email_status = "confirmed"
-    elif email_unconfirmed:
+            match_method = "full_email_exact"
+    
+    # Strategy 2: Unconfirmed pattern - domain check
+    if not email_matches and email_unconfirmed:
         current_display = email_unconfirmed
         if EMAIL_DOMAIN in str(email_unconfirmed).lower():
             email_matches = True
             email_status = "pending"
-    elif has_recovery:
-        email_status = "confirmed_unknown"
-        current_display = "مؤكد لكن غير معروف"
-    else:
+            match_method = "unconfirmed_domain"
+        elif our_email and pattern_matches_email(str(email_unconfirmed), our_email):
+            email_matches = True
+            email_status = "pending"
+            match_method = "unconfirmed_pattern"
+    
+    # Strategy 3: has_recovery but no full email (password unknown or wrong)
+    if not email_matches and has_recovery and not recovery_email_full:
+        if has_password and known_password:
+            # We have password but couldn't get full email - try direct
+            try:
+                direct_email = await manager.get_recovery_email_full(phone, known_password)
+                if direct_email:
+                    current_display = direct_email
+                    if EMAIL_DOMAIN in direct_email.lower():
+                        email_matches = True
+                        email_status = "confirmed"
+                        match_method = "direct_getPasswordSettings"
+            except:
+                pass
+        
+        if not email_matches:
+            email_status = "confirmed_unknown"
+            current_display = "Confirmed but cannot verify (password needed)"
+    
+    # Strategy 4: Login email pattern (separate from recovery, but informative)
+    login_email_is_ours = False
+    if login_email_pattern:
+        if EMAIL_DOMAIN in str(login_email_pattern).lower():
+            login_email_is_ours = True
+        elif our_email and pattern_matches_email(str(login_email_pattern), our_email):
+            login_email_is_ours = True
+    
+    # No recovery email at all
+    if not email_matches and not has_recovery and not email_unconfirmed:
         email_status = "none"
-        current_display = "غير موجود"
+        current_display = "No recovery email set"
+    
+    # Disconnect to free RAM
+    await manager.disconnect(phone)
     
     if email_matches:
         await update_account(
@@ -1037,24 +1097,28 @@ async def confirm_email_changed(account_id: str):
         
         return {
             "status": "success",
-            "message": "Email change verified",
+            "message": "Recovery email verified as ours",
             "email_changed": True,
             "email_status": email_status,
+            "match_method": match_method,
             "recovery_email": recovery_email_full,
             "email_unconfirmed_pattern": email_unconfirmed,
-            "login_email_pattern": security_info.get("login_email_pattern"),
+            "login_email_pattern": login_email_pattern,
         }
     else:
         return {
             "status": "not_changed",
-            "message": "إيميل الاسترداد لم يتغير لإيميلنا بعد",
+            "message": "Recovery email is NOT ours yet. Please change the 2FA recovery email (not login email) to our email.",
             "email_changed": False,
             "email_status": email_status,
             "current_display": current_display,
             "recovery_email": recovery_email_full,
             "email_unconfirmed_pattern": email_unconfirmed,
-            "login_email_pattern": security_info.get("login_email_pattern"),
+            "login_email_pattern": login_email_pattern,
+            "login_email_is_ours": login_email_is_ours,
             "expected_email": our_email,
+            "has_2fa": has_password,
+            "hint": "Make sure to change the RECOVERY email in Settings > Privacy > Two-Step Verification > Recovery Email, NOT the login email."
         }
 
 
@@ -1450,18 +1514,18 @@ async def security_check(account_id: str):
         
         # Unknown API ID (not ours)
         if sess.get("api_id") and sess["api_id"] != our_api_id:
-            sess_flags.append(f"API ID مختلف: {sess['api_id']}")
+            sess_flags.append(f"Different API ID: {sess['api_id']}")
         
         # Non-official app
         if not sess.get("is_official_app"):
-            sess_flags.append("تطبيق غير رسمي")
+            sess_flags.append("Unofficial app")
         
         # Suspicious device names
         device = (sess.get("device_model") or "").lower()
         suspicious_devices = ["termux", "userbot", "pyrogram", "telethon", "bot"]
         for sd in suspicious_devices:
             if sd in device:
-                sess_flags.append(f"جهاز مشبوه: {sess.get('device_model')}")
+                sess_flags.append(f"Suspicious device: {sess.get('device_model')}")
                 break
         
         if sess_flags:
@@ -1485,25 +1549,25 @@ async def security_check(account_id: str):
     if recovery_email_full and EMAIL_DOMAIN not in recovery_email_full.lower():
         red_flags.append({
             "type": "email_changed",
-            "message": f"إيميل الاسترداد تغير لـ: {recovery_email_full}",
+            "message": f"Recovery email changed to: {recovery_email_full}",
             "severity": "critical"
         })
     elif has_recovery and not recovery_email_full and not email_unconfirmed:
         warnings.append({
             "type": "email_unknown",
-            "message": "إيميل الاسترداد موجود لكن لا نستطيع التحقق منه"
+            "message": "Recovery email exists but cannot verify it"
         })
     elif not has_recovery and not email_unconfirmed:
         warnings.append({
             "type": "no_recovery_email",
-            "message": "لا يوجد إيميل استرداد"
+            "message": "No recovery email set"
         })
     
     # --- Check 2FA ---
     if not security_info.get("has_password"):
         red_flags.append({
             "type": "2fa_disabled",
-            "message": "التحقق بخطوتين معطل!",
+            "message": "2FA is DISABLED!",
             "severity": "critical"
         })
     
@@ -1511,7 +1575,7 @@ async def security_check(account_id: str):
     if security_info.get("pending_reset_date"):
         red_flags.append({
             "type": "pending_reset",
-            "message": f"هناك طلب إعادة تعيين كلمة مرور معلق!",
+            "message": f"Pending password reset request!",
             "severity": "critical"
         })
     

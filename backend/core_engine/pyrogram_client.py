@@ -18,6 +18,40 @@ from backend.core_engine.logger import get_logger
 logger = get_logger("PyrogramClient")
 
 
+def pattern_matches_email(pattern: str, expected_email: str) -> bool:
+    """
+    Check if a Telegram masked email pattern matches an expected full email.
+    Telegram masks emails like: em*******************k@channelsseller.site
+    Pattern shows first 2 chars + last char of local part + full domain.
+    """
+    if not pattern or not expected_email:
+        return False
+    pattern = pattern.strip().lower()
+    expected_email = expected_email.strip().lower()
+    if '@' not in pattern or '@' not in expected_email:
+        return False
+    p_local, p_domain = pattern.rsplit('@', 1)
+    e_local, e_domain = expected_email.rsplit('@', 1)
+    if p_domain != e_domain:
+        return False
+    # Extract visible characters (non-asterisk)
+    visible_start = ""
+    visible_end = ""
+    for c in p_local:
+        if c == '*':
+            break
+        visible_start += c
+    for c in reversed(p_local):
+        if c == '*':
+            break
+        visible_end = c + visible_end
+    if visible_start and not e_local.startswith(visible_start):
+        return False
+    if visible_end and not e_local.endswith(visible_end):
+        return False
+    return True
+
+
 class PyrogramSessionManager:
     
     def __init__(self, api_id: int, api_hash: str, sessions_dir: str = "sessions"):

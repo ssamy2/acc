@@ -102,9 +102,9 @@ class SecurityAuditService:
                 issue = {
                     "type": "RECOVERY_EMAIL_NOT_OURS",
                     "severity": "blocker",
-                    "title": "إيميل استرداد 2FA ليس إيميلنا",
-                    "description": f"الإيميل الحالي: {recovery_email_full} - يجب تغييره لإيميلنا",
-                    "action": f"يجب تغيير إيميل استرداد 2FA إلى: {actions_needed.get('our_email', 'N/A')}",
+                    "title": "2FA recovery email is NOT ours",
+                    "description": f"Current email: {recovery_email_full} - must be changed to ours",
+                    "action": f"Change 2FA recovery email to: {actions_needed.get('our_email', 'N/A')}",
                     "current_email": recovery_email_full,
                     "target_email": actions_needed.get("our_email"),
                     "auto_fixable": True
@@ -115,15 +115,18 @@ class SecurityAuditService:
         
         elif email_unconfirmed_pattern:
             # Recovery email is pending confirmation - check the pattern
-            if OUR_EMAIL_DOMAIN in str(email_unconfirmed_pattern).lower():
+            from backend.core_engine.pyrogram_client import pattern_matches_email
+            our_target = actions_needed.get("our_email", "")
+            pattern_match = our_target and pattern_matches_email(str(email_unconfirmed_pattern), our_target)
+            if OUR_EMAIL_DOMAIN in str(email_unconfirmed_pattern).lower() or pattern_match:
                 log_audit(logger, phone, "Recovery Email (2FA)", True, f"Our email pending confirmation: {email_unconfirmed_pattern}")
                 # Email is ours but needs confirmation - auto-fixable
                 issue = {
                     "type": "RECOVERY_EMAIL_PENDING_CONFIRMATION",
                     "severity": "action_required",
-                    "title": "إيميل الاسترداد بانتظار التأكيد",
-                    "description": f"الإيميل {email_unconfirmed_pattern} ينتظر كود التأكيد",
-                    "action": "سيتم تأكيد الإيميل تلقائياً عند استلام الكود",
+                    "title": "Recovery email pending confirmation",
+                    "description": f"Email {email_unconfirmed_pattern} is waiting for verification code",
+                    "action": "Email will be auto-confirmed when code is received",
                     "auto_fixable": True
                 }
                 issues.append(issue)
@@ -131,9 +134,9 @@ class SecurityAuditService:
                 issue = {
                     "type": "RECOVERY_EMAIL_WRONG_PENDING",
                     "severity": "blocker",
-                    "title": "إيميل استرداد خاطئ بانتظار التأكيد",
-                    "description": f"الإيميل المعلق: {email_unconfirmed_pattern} - ليس إيميلنا",
-                    "action": f"يجب إلغاء الإيميل المعلق وتغييره إلى: {actions_needed.get('our_email', 'N/A')}",
+                    "title": "Wrong pending recovery email",
+                    "description": f"Pending email: {email_unconfirmed_pattern} - not ours",
+                    "action": f"Cancel pending email and change to: {actions_needed.get('our_email', 'N/A')}",
                     "current_email": email_unconfirmed_pattern,
                     "target_email": actions_needed.get("our_email"),
                     "auto_fixable": True
@@ -149,9 +152,9 @@ class SecurityAuditService:
             issue = {
                 "type": "RECOVERY_EMAIL_UNKNOWN",
                 "severity": "blocker",
-                "title": "إيميل استرداد مؤكد لكن غير معروف",
-                "description": "يوجد إيميل استرداد مؤكد لكن لا نستطيع التحقق منه بدون كلمة المرور",
-                "action": f"يجب تغيير إيميل الاسترداد إلى: {actions_needed.get('our_email', 'N/A')}",
+                "title": "Confirmed recovery email but unknown",
+                "description": "A confirmed recovery email exists but cannot verify it without the password",
+                "action": f"Change recovery email to: {actions_needed.get('our_email', 'N/A')}",
                 "target_email": actions_needed.get("our_email"),
                 "auto_fixable": True  # Will be changed during finalize
             }
@@ -171,9 +174,9 @@ class SecurityAuditService:
             issue = {
                 "type": "LOGIN_EMAIL_EXISTS",
                 "severity": "action_required",
-                "title": f"يوجد إيميل تسجيل دخول: {login_email_pattern}",
-                "description": "إيميل تسجيل الدخول (ميزة منفصلة عن إيميل استرداد 2FA) - يُفضل إزالته",
-                "action": "إزالة إيميل تسجيل الدخول من: الإعدادات > الخصوصية والأمان > تسجيل الدخول بالإيميل",
+                "title": f"Login email exists: {login_email_pattern}",
+                "description": "Login email (separate from 2FA recovery email) - recommended to remove",
+                "action": "Remove login email from: Settings > Privacy & Security > Sign in with Email",
                 "current_email": login_email_pattern,
                 "auto_fixable": False
             }
