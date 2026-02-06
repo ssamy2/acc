@@ -2049,43 +2049,78 @@ async def delete_account_admin(account_id: str):
     
     manager = get_pyrogram()
     telethon_mgr = get_telethon()
-    logout_results = []
+    
+    pyrogram_result = {"had_session": bool(account.pyrogram_session), "status": "no_session"}
+    telethon_result = {"had_session": bool(account.telethon_session), "status": "no_session"}
     
     # Logout Pyrogram
-    try:
-        if account.pyrogram_session:
+    if account.pyrogram_session:
+        try:
             if phone not in manager.active_clients:
-                await manager.connect_from_string(phone, account.pyrogram_session)
+                connected = await manager.connect_from_string(phone, account.pyrogram_session)
+                if not connected:
+                    pyrogram_result["status"] = "session_expired"
+                    pyrogram_result["detail"] = "Session already dead on Telegram"
+            
             if phone in manager.active_clients:
-                await manager.active_clients[phone].log_out()
-                manager.active_clients.pop(phone, None)
-                logout_results.append("pyrogram_logged_out")
-    except Exception as e:
-        logout_results.append(f"pyrogram_error: {e}")
-        try: await manager.disconnect(phone)
-        except: pass
+                try:
+                    await manager.active_clients[phone].log_out()
+                    pyrogram_result["status"] = "logged_out"
+                    pyrogram_result["detail"] = "Successfully logged out from Telegram"
+                except Exception as e:
+                    err = str(e)
+                    if "AUTH_KEY_UNREGISTERED" in err or "401" in err:
+                        pyrogram_result["status"] = "session_expired"
+                        pyrogram_result["detail"] = "Session was already expired"
+                    else:
+                        pyrogram_result["status"] = "error"
+                        pyrogram_result["detail"] = err
+                finally:
+                    manager.active_clients.pop(phone, None)
+        except Exception as e:
+            pyrogram_result["status"] = "error"
+            pyrogram_result["detail"] = str(e)
+            try: await manager.disconnect(phone)
+            except: pass
     
     # Logout Telethon
-    try:
-        if account.telethon_session:
+    if account.telethon_session:
+        try:
             if phone not in telethon_mgr.active_clients:
-                await telethon_mgr.connect_from_string(phone, account.telethon_session)
+                connected = await telethon_mgr.connect_from_string(phone, account.telethon_session)
+                if not connected:
+                    telethon_result["status"] = "session_expired"
+                    telethon_result["detail"] = "Session already dead on Telegram"
+            
             if phone in telethon_mgr.active_clients:
-                await telethon_mgr.active_clients[phone].log_out()
-                telethon_mgr.active_clients.pop(phone, None)
-                logout_results.append("telethon_logged_out")
-    except Exception as e:
-        logout_results.append(f"telethon_error: {e}")
-        try: await telethon_mgr.disconnect(phone)
-        except: pass
+                try:
+                    await telethon_mgr.active_clients[phone].log_out()
+                    telethon_result["status"] = "logged_out"
+                    telethon_result["detail"] = "Successfully logged out from Telegram"
+                except Exception as e:
+                    err = str(e)
+                    if "AUTH_KEY_UNREGISTERED" in err or "401" in err:
+                        telethon_result["status"] = "session_expired"
+                        telethon_result["detail"] = "Session was already expired"
+                    else:
+                        telethon_result["status"] = "error"
+                        telethon_result["detail"] = err
+                finally:
+                    telethon_mgr.active_clients.pop(phone, None)
+        except Exception as e:
+            telethon_result["status"] = "error"
+            telethon_result["detail"] = str(e)
+            try: await telethon_mgr.disconnect(phone)
+            except: pass
     
     # Delete from DB
     async with async_session() as session:
         await session.execute(sql_delete(Account).where(Account.phone == phone))
         await session.commit()
     
-    await log_auth_action(phone, "account_deleted", "success", "; ".join(logout_results))
-    logger.info(f"Account {phone} deleted from DB")
+    summary = f"pyrogram={pyrogram_result['status']}, telethon={telethon_result['status']}"
+    await log_auth_action(phone, "account_deleted", "success", summary)
+    logger.info(f"Account {phone} deleted from DB ({summary})")
     
     try:
         from backend.log_bot import log_account_deleted
@@ -2093,7 +2128,12 @@ async def delete_account_admin(account_id: str):
     except:
         pass
     
-    return {"status": "success", "message": f"Account {phone} deleted", "logout_results": logout_results}
+    return {
+        "status": "success",
+        "message": f"Account {phone} deleted",
+        "pyrogram": pyrogram_result,
+        "telethon": telethon_result
+    }
 
 
 @router.post("/admin/account/{account_id}/terminate-session")
@@ -2165,41 +2205,88 @@ async def logout_our_sessions_admin(account_id: str):
     
     manager = get_pyrogram()
     telethon_mgr = get_telethon()
-    results = []
     
-    try:
-        if account.pyrogram_session:
+    pyrogram_result = {"had_session": bool(account.pyrogram_session), "status": "no_session"}
+    telethon_result = {"had_session": bool(account.telethon_session), "status": "no_session"}
+    
+    # --- Pyrogram logout ---
+    if account.pyrogram_session:
+        try:
             if phone not in manager.active_clients:
-                await manager.connect_from_string(phone, account.pyrogram_session)
+                connected = await manager.connect_from_string(phone, account.pyrogram_session)
+                if not connected:
+                    pyrogram_result["status"] = "session_expired"
+                    pyrogram_result["detail"] = "Session already dead on Telegram (AUTH_KEY_UNREGISTERED or similar)"
+            
             if phone in manager.active_clients:
-                await manager.active_clients[phone].log_out()
-                manager.active_clients.pop(phone, None)
-                results.append("pyrogram_logged_out")
-    except Exception as e:
-        results.append(f"pyrogram_error: {e}")
+                try:
+                    await manager.active_clients[phone].log_out()
+                    pyrogram_result["status"] = "logged_out"
+                    pyrogram_result["detail"] = "Successfully logged out from Telegram"
+                except Exception as e:
+                    err = str(e)
+                    if "AUTH_KEY_UNREGISTERED" in err or "401" in err:
+                        pyrogram_result["status"] = "session_expired"
+                        pyrogram_result["detail"] = "Session was already expired on Telegram"
+                    else:
+                        pyrogram_result["status"] = "error"
+                        pyrogram_result["detail"] = err
+                finally:
+                    manager.active_clients.pop(phone, None)
+        except Exception as e:
+            pyrogram_result["status"] = "error"
+            pyrogram_result["detail"] = str(e)
+            try: await manager.disconnect(phone)
+            except: pass
     
-    try:
-        if account.telethon_session:
+    # --- Telethon logout ---
+    if account.telethon_session:
+        try:
             if phone not in telethon_mgr.active_clients:
-                await telethon_mgr.connect_from_string(phone, account.telethon_session)
+                connected = await telethon_mgr.connect_from_string(phone, account.telethon_session)
+                if not connected:
+                    telethon_result["status"] = "session_expired"
+                    telethon_result["detail"] = "Session already dead on Telegram (AUTH_KEY_UNREGISTERED or similar)"
+            
             if phone in telethon_mgr.active_clients:
-                await telethon_mgr.active_clients[phone].log_out()
-                telethon_mgr.active_clients.pop(phone, None)
-                results.append("telethon_logged_out")
-    except Exception as e:
-        results.append(f"telethon_error: {e}")
+                try:
+                    await telethon_mgr.active_clients[phone].log_out()
+                    telethon_result["status"] = "logged_out"
+                    telethon_result["detail"] = "Successfully logged out from Telegram"
+                except Exception as e:
+                    err = str(e)
+                    if "AUTH_KEY_UNREGISTERED" in err or "401" in err:
+                        telethon_result["status"] = "session_expired"
+                        telethon_result["detail"] = "Session was already expired on Telegram"
+                    else:
+                        telethon_result["status"] = "error"
+                        telethon_result["detail"] = err
+                finally:
+                    telethon_mgr.active_clients.pop(phone, None)
+        except Exception as e:
+            telethon_result["status"] = "error"
+            telethon_result["detail"] = str(e)
+            try: await telethon_mgr.disconnect(phone)
+            except: pass
     
     # Clear sessions from DB
     await update_account(phone, pyrogram_session=None, telethon_session=None)
-    await log_auth_action(phone, "logout_our_sessions", "success", "; ".join(results))
+    
+    summary = f"pyrogram={pyrogram_result['status']}, telethon={telethon_result['status']}"
+    await log_auth_action(phone, "logout_our_sessions", "success", summary)
     
     try:
         from backend.log_bot import log_admin_action
-        await log_admin_action("LOGOUT_OUR_SESSIONS", phone, "; ".join(results))
+        await log_admin_action("LOGOUT_OUR_SESSIONS", phone, summary)
     except:
         pass
     
-    return {"status": "success", "results": results}
+    return {
+        "status": "success",
+        "pyrogram": pyrogram_result,
+        "telethon": telethon_result,
+        "sessions_cleared_from_db": True
+    }
 
 
 # ============== Documentation Endpoint ==============

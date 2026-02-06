@@ -364,8 +364,16 @@ async function terminateAllSessions(phone) {
 async function logoutOurSessions(phone) {
     if (!confirm('Logout our Pyrogram+Telethon sessions? Session strings will be cleared.')) return;
     try {
-        await api(`/admin/account/${encodeURIComponent(phone)}/logout-our-sessions`,'POST');
-        toast('Our sessions logged out','ok');
+        const r = await api(`/admin/account/${encodeURIComponent(phone)}/logout-our-sessions`,'POST');
+        const pStatus = r.pyrogram?.status || 'unknown';
+        const tStatus = r.telethon?.status || 'unknown';
+        const pDetail = r.pyrogram?.detail || '';
+        const tDetail = r.telethon?.detail || '';
+        const icon = (s) => s === 'logged_out' ? '✅' : s === 'session_expired' ? '⚠️' : s === 'no_session' ? '⬜' : '❌';
+        const msg = `Pyrogram: ${icon(pStatus)} ${pStatus} ${pDetail ? '(' + pDetail + ')' : ''}\nTelethon: ${icon(tStatus)} ${tStatus} ${tDetail ? '(' + tDetail + ')' : ''}`;
+        const allOk = ['logged_out','session_expired','no_session'].includes(pStatus) && ['logged_out','session_expired','no_session'].includes(tStatus);
+        alert(`Logout Results:\n\n${msg}`);
+        toast(allOk ? 'Sessions cleared' : 'Some errors occurred', allOk ? 'ok' : 'err');
         viewAccount(phone);
     } catch(e) { toast(e.message,'err'); }
 }
@@ -385,8 +393,11 @@ async function securityCheck(phone) {
 async function deleteAccount(phone) {
     if (!confirm(`DELETE account ${phone}? This will logout all sessions and remove from database. Cannot be undone!`)) return;
     try {
-        await api(`/admin/account/${encodeURIComponent(phone)}`,'DELETE');
-        toast('Account deleted','ok');
+        const r = await api(`/admin/account/${encodeURIComponent(phone)}`,'DELETE');
+        const pStatus = r.pyrogram?.status || 'unknown';
+        const tStatus = r.telethon?.status || 'unknown';
+        const icon = (s) => s === 'logged_out' ? '✅' : s === 'session_expired' ? '⚠️' : s === 'no_session' ? '⬜' : '❌';
+        toast(`Deleted. Pyrogram: ${icon(pStatus)} ${pStatus} | Telethon: ${icon(tStatus)} ${tStatus}`, 'ok');
         closeModal(); loadDashboard();
     } catch(e) { toast(e.message,'err'); }
 }
