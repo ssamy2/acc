@@ -24,7 +24,7 @@ class TelethonSessionManager:
         self.api_id = api_id
         self.api_hash = api_hash
         
-        # Use absolute path for sessions directory
+        # Sessions dir kept for reference only - NO files are created
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.sessions_dir = os.path.join(base_dir, sessions_dir)
         
@@ -33,7 +33,6 @@ class TelethonSessionManager:
         # Per-phone locks for concurrency isolation
         self._locks: Dict[str, asyncio.Lock] = {}
         
-        os.makedirs(self.sessions_dir, exist_ok=True)
         logger.info(f"TelethonSessionManager initialized. Sessions dir: {self.sessions_dir}")
     
     def _get_lock(self, phone: str) -> asyncio.Lock:
@@ -49,8 +48,8 @@ class TelethonSessionManager:
         start_time = time.time()
         logger.info(f"[Telethon] Sending code to {phone}")
         
-        session_path = self._get_session_path(phone)
-        client = TelegramClient(session_path, self.api_id, self.api_hash)
+        # Use StringSession (in-memory) - NO files on disk
+        client = TelegramClient(StringSession(), self.api_id, self.api_hash)
         
         try:
             await client.connect()
@@ -178,10 +177,7 @@ class TelethonSessionManager:
             return None
         
         try:
-            # Save the session to get the auth_key
-            client.session.save()
-            
-            # Create a StringSession from the existing session's auth_key
+            # Export session as string directly (no file write)
             string_session = StringSession.save(client.session)
             
             duration = time.time() - start_time

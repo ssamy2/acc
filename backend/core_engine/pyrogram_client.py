@@ -58,7 +58,7 @@ class PyrogramSessionManager:
         self.api_id = api_id
         self.api_hash = api_hash
         
-        # Use absolute path for sessions directory
+        # Sessions dir kept for reference only - NO files are created
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.sessions_dir = os.path.join(base_dir, sessions_dir)
         
@@ -67,7 +67,6 @@ class PyrogramSessionManager:
         # Per-phone locks for concurrency isolation
         self._locks: Dict[str, asyncio.Lock] = {}
         
-        os.makedirs(self.sessions_dir, exist_ok=True)
         logger.info(f"PyrogramSessionManager initialized. Sessions dir: {self.sessions_dir}")
     
     def _get_lock(self, phone: str) -> asyncio.Lock:
@@ -83,15 +82,15 @@ class PyrogramSessionManager:
         start_time = time.time()
         logger.info(f"Sending code to {phone}")
         
-        session_path = self._get_session_path(phone)
+        safe_phone = phone.replace("+", "").replace(" ", "")
         
-        # Create client for new login (no existing session)
+        # Create client in-memory only - NO files on disk
         client = Client(
-            name=session_path,
+            name=f"login_{safe_phone}",
             api_id=self.api_id,
             api_hash=self.api_hash,
             phone_number=phone,
-            in_memory=False
+            in_memory=True
         )
         
         try:
@@ -226,10 +225,8 @@ class PyrogramSessionManager:
         """Ensure client is connected and authorized. Returns client or None."""
         client = self.active_clients.get(phone)
         if not client:
-            connected = await self.connect_from_file(phone)
-            if not connected:
-                return None
-            client = self.active_clients.get(phone)
+            # No active client - caller must connect via session string first
+            return None
         
         if not client.is_connected:
             try:
