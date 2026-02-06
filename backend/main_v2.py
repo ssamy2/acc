@@ -1,5 +1,6 @@
 import sys
 import os
+import asyncio
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
 
@@ -9,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 
+from config import DEV_MODE, ALLOWED_ORIGINS, API_BASE_URL, FRONTEND_URL
 from backend.api.routes import router as api_router
 from backend.api.webhook_routes import router as webhook_router
 from backend.api.auth import router as auth_router
@@ -20,6 +22,45 @@ from backend.models.database import init_db
 from backend.core_engine.logger import get_logger
 
 logger = get_logger("Main")
+
+CLEANUP_INTERVAL_SECONDS = 300  # 5 minutes
+
+
+async def _periodic_cleanup():
+    """Periodically clean up dead/inactive connections to free RAM."""
+    while True:
+        try:
+            await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+            from backend.api.routes import get_pyrogram, get_telethon
+            
+            pyrogram_mgr = get_pyrogram()
+            cleaned = await pyrogram_mgr.cleanup_inactive_clients()
+            
+            telethon_mgr = get_telethon()
+            telethon_cleaned = 0
+            for phone in list(telethon_mgr.active_clients.keys()):
+                client = telethon_mgr.active_clients.get(phone)
+                if not client:
+                    continue
+                try:
+                    if not client.is_connected():
+                        telethon_mgr.active_clients.pop(phone, None)
+                        telethon_cleaned += 1
+                except:
+                    try:
+                        await client.disconnect()
+                    except:
+                        pass
+                    telethon_mgr.active_clients.pop(phone, None)
+                    telethon_cleaned += 1
+            
+            total = cleaned + telethon_cleaned
+            if total > 0:
+                logger.info(f"[Cleanup] Freed {total} dead connections (Pyrogram: {cleaned}, Telethon: {telethon_cleaned})")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"[Cleanup] Error: {e}")
 
 
 @asynccontextmanager
@@ -40,15 +81,25 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized")
     
-    # Start log bot
+    # Start log bot (HTTP mode - no conflicts)
     try:
         from backend.log_bot import init_log_bot
         await init_log_bot()
-        logger.info("Log bot started")
+        logger.info("Log bot started (HTTP mode)")
     except Exception as e:
         logger.warning(f"Log bot warning: {e}")
     
+    # Start periodic cleanup task (every 5 minutes)
+    cleanup_task = asyncio.create_task(_periodic_cleanup())
+    
     yield
+    
+    # Cancel cleanup task
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     
     logger.info("Shutting down...")
     try:
@@ -86,13 +137,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8001",
-        "http://127.0.0.1:8001",
-        "https://acctest.channelsseller.site",
-        "http://acctest.channelsseller.site",
-        "*"
-    ],
+    allow_origins=ALLOWED_ORIGINS + ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

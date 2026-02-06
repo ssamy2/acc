@@ -16,8 +16,7 @@ from backend.core_engine.logger import get_logger
 logger = get_logger("DeliveryService")
 
 CONFIRMATION_TIMEOUT_MINUTES = 15
-API_ID = 28907635
-API_HASH = "fa6c3335de68283781976ae20f813f73"
+from config import API_ID, API_HASH
 
 
 class DeliveryService:
@@ -124,7 +123,7 @@ class DeliveryService:
             return {
                 "status": "success",
                 "code": code,
-                "password": account.generated_password,
+                "has_password": account.generated_password is not None,
                 "delivery_status": "CODE_SENT",
                 "confirmation_deadline": deadline.isoformat(),
                 "timeout_minutes": CONFIRMATION_TIMEOUT_MINUTES,

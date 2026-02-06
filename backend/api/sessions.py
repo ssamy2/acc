@@ -19,9 +19,8 @@ from backend.models.database import get_account, update_account
 logger = get_logger("SessionsAPI")
 router = APIRouter(tags=["Sessions"])
 
-API_ID = 28907635
-API_HASH = "fa6c3335de68283781976ae20f813f73"
-OUR_DOMAIN = "channelsseller.site"
+from config import API_ID, API_HASH, EMAIL_DOMAIN
+OUR_DOMAIN = EMAIL_DOMAIN
 
 
 def get_pyrogram():
@@ -84,40 +83,51 @@ async def check_telethon_health(phone: str) -> Dict[str, Any]:
     return {"active": False, "type": "telethon", "error": "Session dead"}
 
 
-async def get_account_emails_live(phone: str) -> Dict[str, Any]:
+async def get_account_emails_live(phone: str, known_password: str = None) -> Dict[str, Any]:
     """
-    Get ALL email info from Telegram (dynamic fetch):
-    - login_email: Email used to login (alternative to phone number)
-    - recovery_email: Email used to reset 2FA password (pattern only, full email hidden)
-    - pending_email: Email waiting for confirmation
+    Get BOTH login email AND recovery email from Telegram (dynamic fetch):
+    - login_email_pattern: Email used to login (alternative to phone) - SEPARATE feature!
+    - recovery_email_full: Full 2FA recovery email (only with known_password)
+    - email_unconfirmed_pattern: Pending recovery email change
+    - has_recovery_email: Recovery email confirmed (pattern hidden by Telegram)
     """
     manager = get_pyrogram()
     
     try:
-        security = await manager.get_security_info(phone)
+        security = await manager.get_security_info(phone, known_password=known_password)
         
         if security.get("status") != "success":
             return {"status": "error", "error": "Failed to get security info"}
         
+        recovery_email_full = security.get("recovery_email_full")
+        email_unconfirmed = security.get("email_unconfirmed_pattern")
+        has_recovery = security.get("has_recovery_email", False)
+        
+        # Determine recovery email status
+        recovery_status = "none"
+        is_our_recovery = False
+        if recovery_email_full:
+            recovery_status = "confirmed"
+            is_our_recovery = OUR_DOMAIN in recovery_email_full.lower()
+        elif email_unconfirmed:
+            recovery_status = "pending"
+            is_our_recovery = OUR_DOMAIN in str(email_unconfirmed).lower()
+        elif has_recovery:
+            recovery_status = "confirmed_unknown"
+        
         result = {
             "status": "success",
             "has_2fa": security.get("has_password", False),
-            "login_email": security.get("login_email_pattern"),
-            "login_email_status": "none",
-            "pending_email": security.get("email_unconfirmed_pattern"),
-            "has_recovery_email": security.get("has_recovery_email", False),
+            "recovery_email_full": recovery_email_full,
+            "recovery_email_status": recovery_status,
+            "is_our_recovery_email": is_our_recovery,
+            "email_unconfirmed_pattern": email_unconfirmed,
+            "has_recovery_email": has_recovery,
+            "login_email_pattern": security.get("login_email_pattern"),
+            "login_email_status": "confirmed" if security.get("login_email_pattern") else "none",
             "password_hint": security.get("password_hint"),
             "sessions_count": security.get("other_sessions_count", 0) + 1
         }
-        
-        if security.get("login_email_pattern"):
-            result["login_email_status"] = "confirmed"
-            result["is_our_login_email"] = OUR_DOMAIN in str(security["login_email_pattern"])
-        elif security.get("email_unconfirmed_pattern"):
-            result["login_email_status"] = "pending"
-            result["is_our_login_email"] = OUR_DOMAIN in str(security["email_unconfirmed_pattern"])
-        else:
-            result["is_our_login_email"] = False
         
         return result
         
@@ -177,11 +187,13 @@ async def get_account_emails(account_id: str):
         "status": "success",
         "account_id": phone,
         "telegram_id": account.telegram_id,
-        "login_email": emails.get("login_email"),
-        "login_email_status": emails.get("login_email_status"),
-        "pending_email": emails.get("pending_email"),
+        "recovery_email": emails.get("recovery_email_full"),
+        "recovery_email_status": emails.get("recovery_email_status", "none"),
+        "is_our_recovery_email": emails.get("is_our_recovery_email", False),
+        "email_unconfirmed_pattern": emails.get("email_unconfirmed_pattern"),
         "has_recovery_email": emails.get("has_recovery_email"),
-        "is_our_login_email": emails.get("is_our_login_email"),
+        "login_email_pattern": emails.get("login_email_pattern"),
+        "login_email_status": emails.get("login_email_status"),
         "target_email": account.target_email,
         "has_2fa": emails.get("has_2fa"),
         "sessions_count": emails.get("sessions_count")
@@ -218,11 +230,13 @@ async def get_session_info(account_id: str):
             "has_extra": emails.get("sessions_count", 0) > expected_sessions
         },
         "emails": {
-            "login_email": emails.get("login_email"),
-            "login_email_status": emails.get("login_email_status"),
-            "pending_email": emails.get("pending_email"),
+            "recovery_email": emails.get("recovery_email_full"),
+            "recovery_email_status": emails.get("recovery_email_status", "none"),
+            "is_our_recovery_email": emails.get("is_our_recovery_email", False),
+            "email_unconfirmed_pattern": emails.get("email_unconfirmed_pattern"),
             "has_recovery_email": emails.get("has_recovery_email"),
-            "is_our_email": emails.get("is_our_login_email"),
+            "login_email_pattern": emails.get("login_email_pattern"),
+            "login_email_status": emails.get("login_email_status"),
             "target_email": account.target_email
         },
         "security": {

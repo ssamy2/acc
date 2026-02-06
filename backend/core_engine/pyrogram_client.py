@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 import time
+from collections import defaultdict
 from typing import Optional, Dict, Any, Tuple
 from pyrogram import Client
 from pyrogram.errors import (
@@ -22,12 +23,23 @@ class PyrogramSessionManager:
     def __init__(self, api_id: int, api_hash: str, sessions_dir: str = "sessions"):
         self.api_id = api_id
         self.api_hash = api_hash
-        self.sessions_dir = sessions_dir
+        
+        # Use absolute path for sessions directory
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.sessions_dir = os.path.join(base_dir, sessions_dir)
+        
         self.active_clients: Dict[str, Client] = {}
         self.phone_code_hashes: Dict[str, str] = {}
+        # Per-phone locks for concurrency isolation
+        self._locks: Dict[str, asyncio.Lock] = {}
         
-        os.makedirs(sessions_dir, exist_ok=True)
-        logger.info(f"PyrogramSessionManager initialized. Sessions dir: {sessions_dir}")
+        os.makedirs(self.sessions_dir, exist_ok=True)
+        logger.info(f"PyrogramSessionManager initialized. Sessions dir: {self.sessions_dir}")
+    
+    def _get_lock(self, phone: str) -> asyncio.Lock:
+        if phone not in self._locks:
+            self._locks[phone] = asyncio.Lock()
+        return self._locks[phone]
     
     def _get_session_path(self, phone: str) -> str:
         safe_phone = phone.replace("+", "").replace(" ", "")
@@ -38,26 +50,33 @@ class PyrogramSessionManager:
         logger.info(f"Sending code to {phone}")
         
         session_path = self._get_session_path(phone)
+        
+        # Create client for new login (no existing session)
         client = Client(
-            session_path,
+            name=session_path,
             api_id=self.api_id,
             api_hash=self.api_hash,
-            phone_number=phone
+            phone_number=phone,
+            in_memory=False
         )
         
         try:
+            # Connect to Telegram
             await client.connect()
+            logger.info(f"Connected to Telegram for {phone}")
             
-            if await client.get_me():
-                duration = time.time() - start_time
-                logger.info(f"Already logged in: {phone} (duration: {duration:.2f}s)")
-                self.active_clients[phone] = client
-                return {"status": "already_logged_in", "phone": phone, "duration": duration}
+            # Check if already authorized
+            try:
+                me = await client.get_me()
+                if me:
+                    duration = time.time() - start_time
+                    logger.info(f"Already logged in: {phone} (ID: {me.id}, duration: {duration:.2f}s)")
+                    self.active_clients[phone] = client
+                    return {"status": "already_logged_in", "phone": phone, "user_id": me.id, "duration": duration}
+            except Exception as e:
+                logger.info(f"Not logged in yet for {phone}: {e}")
             
-        except Exception:
-            pass
-        
-        try:
+            # Send verification code
             sent_code = await client.send_code(phone)
             self.phone_code_hashes[phone] = sent_code.phone_code_hash
             self.active_clients[phone] = client
@@ -74,10 +93,15 @@ class PyrogramSessionManager:
         except FloodWait as e:
             duration = time.time() - start_time
             logger.error(f"FloodWait: {e.value} seconds (duration: {duration:.2f}s)")
+            await client.disconnect()
             return {"status": "error", "error": f"Please wait {e.value} seconds", "duration": duration}
         except Exception as e:
             duration = time.time() - start_time
             logger.error(f"Error sending code: {e} (duration: {duration:.2f}s)")
+            try:
+                await client.disconnect()
+            except:
+                pass
             return {"status": "error", "error": str(e), "duration": duration}
     
     async def verify_code(self, phone: str, code: str) -> Dict[str, Any]:
@@ -118,6 +142,11 @@ class PyrogramSessionManager:
             duration = time.time() - start_time
             logger.warning(f"Code expired for {phone} (duration: {duration:.2f}s)")
             return {"status": "error", "error": "Verification code expired", "duration": duration}
+        
+        except FloodWait as e:
+            duration = time.time() - start_time
+            logger.warning(f"FloodWait for {phone}: {e.value}s (duration: {duration:.2f}s)")
+            return {"status": "error", "error": f"Too many attempts. Wait {e.value} seconds.", "flood_wait": e.value, "duration": duration}
             
         except Exception as e:
             duration = time.time() - start_time
@@ -148,36 +177,107 @@ class PyrogramSessionManager:
             duration = time.time() - start_time
             logger.warning(f"Invalid 2FA password for {phone} (duration: {duration:.2f}s)")
             return {"status": "error", "error": "Invalid 2FA password", "duration": duration}
+        
+        except FloodWait as e:
+            duration = time.time() - start_time
+            logger.warning(f"FloodWait for 2FA {phone}: {e.value}s (duration: {duration:.2f}s)")
+            return {"status": "error", "error": f"Too many attempts. Wait {e.value} seconds.", "flood_wait": e.value, "duration": duration}
             
         except Exception as e:
             duration = time.time() - start_time
             logger.error(f"Error verifying 2FA: {e} (duration: {duration:.2f}s)")
             return {"status": "error", "error": str(e), "duration": duration}
     
-    async def get_security_info(self, phone: str) -> Dict[str, Any]:
-        start_time = time.time()
-        logger.info(f"Getting security info for {phone}")
-        
+    async def _ensure_connected(self, phone: str) -> Optional[Any]:
+        """Ensure client is connected and authorized. Returns client or None."""
         client = self.active_clients.get(phone)
         if not client:
-            # Try to reconnect using existing session
-            session_path = self._get_session_path(phone)
-            client = Client(
-                session_path,
-                api_id=self.api_id,
-                api_hash=self.api_hash,
-                phone_number=phone
-            )
+            connected = await self.connect_from_file(phone)
+            if not connected:
+                return None
+            client = self.active_clients.get(phone)
+        
+        if not client.is_connected:
             try:
                 await client.connect()
                 if not await client.get_me():
-                    return {"status": "error", "error": "Session expired. Please re-authenticate."}
+                    return None
                 self.active_clients[phone] = client
             except Exception as e:
                 logger.error(f"Failed to reconnect session for {phone}: {e}")
-                return {"status": "error", "error": "Session not found. Please re-authenticate."}
+                return None
+        return client
+    
+    async def get_recovery_email_full(self, phone: str, password: str) -> Optional[str]:
+        """
+        Get the FULL recovery email address using account.getPasswordSettings.
+        Requires knowing the 2FA password.
+        Returns the full email or None.
+        
+        Official API:
+        - account.getPasswordSettings(password: InputCheckPasswordSRP) -> account.passwordSettings
+        - account.passwordSettings has field: email (string, optional) = the FULL recovery email
+        """
+        client = self.active_clients.get(phone)
+        if not client:
+            return None
         
         try:
+            from pyrogram.utils import compute_password_check
+            
+            # Get password info for SRP computation
+            password_info = await client.invoke(functions.account.GetPassword())
+            
+            if not password_info.has_password:
+                logger.info(f"No 2FA password set for {phone}, cannot get recovery email")
+                return None
+            
+            # Compute SRP check
+            srp_check = compute_password_check(password_info, password)
+            
+            # Get password settings (contains full email)
+            settings = await client.invoke(
+                functions.account.GetPasswordSettings(password=srp_check)
+            )
+            
+            recovery_email = getattr(settings, 'email', None)
+            if recovery_email:
+                logger.info(f"Recovery email for {phone}: {recovery_email}")
+            else:
+                logger.info(f"No recovery email found in settings for {phone}")
+            
+            return recovery_email
+            
+        except Exception as e:
+            logger.error(f"Error getting recovery email for {phone}: {e}")
+            return None
+    
+    async def get_security_info(self, phone: str, known_password: str = None) -> Dict[str, Any]:
+        """
+        Get comprehensive security info for an account.
+        
+        Official Telegram API fields from account.getPassword():
+        - has_password: bool - 2FA password is enabled
+        - has_recovery: bool - recovery email is SET and CONFIRMED (but pattern is hidden!)
+        - email_unconfirmed_pattern: str - recovery email set but NOT YET CONFIRMED (pattern visible)
+        - login_email_pattern: str - LOGIN email (separate feature! NOT recovery email!)
+        
+        To get the FULL confirmed recovery email, use account.getPasswordSettings(password)
+        which requires knowing the 2FA password.
+        
+        Args:
+            phone: Phone number
+            known_password: If provided, will fetch the full recovery email address
+        """
+        start_time = time.time()
+        logger.info(f"Getting security info for {phone}")
+        
+        client = await self._ensure_connected(phone)
+        if not client:
+            return {"status": "error", "error": "Session not found or expired."}
+        
+        try:
+            # ===== Get sessions/authorizations =====
             authorizations = await client.invoke(functions.account.GetAuthorizations())
             
             sessions = []
@@ -197,7 +297,8 @@ class PyrogramSessionManager:
                     "ip": auth.ip,
                     "country": auth.country,
                     "region": auth.region,
-                    "is_current": auth.current
+                    "is_current": auth.current,
+                    "is_official_app": getattr(auth, 'official_app', False),
                 }
                 
                 if auth.current:
@@ -205,49 +306,58 @@ class PyrogramSessionManager:
                 else:
                     sessions.append(session_info)
             
+            # ===== Get 2FA / password info =====
             password_info = await client.invoke(functions.account.GetPassword())
             
-            has_recovery_email = False
-            email_unconfirmed_pattern = None
-            login_email_pattern = None
+            # --- Recovery email (for 2FA password recovery) ---
+            # has_recovery = True means recovery email is SET and CONFIRMED
+            # BUT Telegram hides the pattern! We can't see it from getPassword alone.
+            has_recovery = getattr(password_info, 'has_recovery', False)
             
-            if hasattr(password_info, 'has_recovery'):
-                has_recovery_email = password_info.has_recovery
+            # email_unconfirmed_pattern = recovery email set but NOT YET CONFIRMED
+            # Pattern is visible like "t***@gmail.com"
+            email_unconfirmed_pattern = getattr(password_info, 'email_unconfirmed_pattern', None) or None
             
-            if hasattr(password_info, 'email_unconfirmed_pattern') and password_info.email_unconfirmed_pattern:
-                email_unconfirmed_pattern = password_info.email_unconfirmed_pattern
+            # --- Login email (for passwordless login - SEPARATE feature!) ---
+            # This is NOT the recovery email! It's the email used to log in without phone.
+            login_email_pattern = getattr(password_info, 'login_email_pattern', None) or None
             
-            if hasattr(password_info, 'login_email_pattern') and password_info.login_email_pattern:
-                login_email_pattern = password_info.login_email_pattern
+            # --- Pending password reset ---
+            pending_reset_date = getattr(password_info, 'pending_reset_date', None)
             
-            logger.info(f"Password info for {phone}: has_password={password_info.has_password}, has_recovery={has_recovery_email}")
-            logger.info(f"Email info for {phone}: recovery_unconfirmed_pattern={email_unconfirmed_pattern}, login_email_pattern={login_email_pattern}")
-            
-            if hasattr(password_info, '__dict__'):
-                all_attrs = {k: v for k, v in vars(password_info).items() if not k.startswith('_')}
-                logger.debug(f"Full password_info attributes for {phone}: {all_attrs}")
-            
-            has_any_email = (
-                has_recovery_email or 
-                (email_unconfirmed_pattern is not None and len(email_unconfirmed_pattern) > 0) or
-                (login_email_pattern is not None and len(login_email_pattern) > 0)
+            logger.info(
+                f"[{phone}] 2FA Info: has_password={password_info.has_password}, "
+                f"has_recovery={has_recovery}, "
+                f"recovery_unconfirmed={email_unconfirmed_pattern}, "
+                f"login_email={login_email_pattern}, "
+                f"pending_reset={pending_reset_date}"
             )
+            
+            # ===== Get FULL recovery email if password is known =====
+            recovery_email_full = None
+            if known_password and password_info.has_password:
+                recovery_email_full = await self.get_recovery_email_full(phone, known_password)
             
             security_info = {
                 "status": "success",
+                # 2FA
                 "has_password": password_info.has_password,
-                "has_recovery_email": has_recovery_email,
-                "email_unconfirmed_pattern": email_unconfirmed_pattern,
-                "login_email_pattern": login_email_pattern,
-                "has_any_email": has_any_email,
                 "password_hint": password_info.hint if password_info.has_password else None,
+                "pending_reset_date": pending_reset_date,
+                # Recovery email (2FA)
+                "has_recovery_email": has_recovery,
+                "email_unconfirmed_pattern": email_unconfirmed_pattern,
+                "recovery_email_full": recovery_email_full,
+                # Login email (separate feature)
+                "login_email_pattern": login_email_pattern,
+                # Sessions
                 "current_session": current_session,
                 "other_sessions": sessions,
-                "other_sessions_count": len(sessions)
+                "other_sessions_count": len(sessions),
             }
             
             duration = time.time() - start_time
-            logger.info(f"Security info retrieved for {phone}: 2FA={security_info['has_password']}, Sessions={len(sessions)} (duration: {duration:.2f}s)")
+            logger.info(f"Security info for {phone}: 2FA={password_info.has_password}, Recovery={has_recovery}, Sessions={len(sessions)} (duration: {duration:.2f}s)")
             security_info["duration"] = duration
             return security_info
             
@@ -286,7 +396,15 @@ class PyrogramSessionManager:
             logger.error(f"Error terminating sessions: {e} (duration: {duration:.2f}s)")
             return {"status": "error", "error": str(e), "duration": duration}
     
-    async def get_last_telegram_code(self, phone: str) -> Optional[str]:
+    async def get_last_telegram_code(self, phone: str, max_age_seconds: int = 120) -> Optional[str]:
+        """
+        Get the latest verification code from Telegram service messages (777000).
+        Supports 5 and 6 digit codes. Only returns codes from recent messages.
+        
+        Args:
+            phone: Phone number
+            max_age_seconds: Max age of message to consider (default 2 minutes)
+        """
         start_time = time.time()
         logger.info(f"Getting last Telegram code for {phone}")
         
@@ -295,13 +413,23 @@ class PyrogramSessionManager:
             return None
         
         try:
-            async for message in client.get_chat_history(777000, limit=5):
-                if message.text:
-                    codes = re.findall(r'\b(\d{5})\b', message.text)
-                    if codes:
-                        duration = time.time() - start_time
-                        logger.info(f"Found code in Telegram messages: {codes[0]} (duration: {duration:.2f}s)")
-                        return codes[0]
+            import datetime
+            cutoff_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=max_age_seconds)
+            
+            async for message in client.get_chat_history(777000, limit=10):
+                if not message.text:
+                    continue
+                
+                # Skip old messages
+                if message.date and message.date < cutoff_time:
+                    break
+                
+                # Match 5-6 digit codes
+                codes = re.findall(r'\b(\d{5,6})\b', message.text)
+                if codes:
+                    duration = time.time() - start_time
+                    logger.info(f"Found code in Telegram messages: {codes[0]} (duration: {duration:.2f}s)")
+                    return codes[0]
             
             duration = time.time() - start_time
             logger.warning(f"No code found in messages (duration: {duration:.2f}s)")
@@ -408,8 +536,9 @@ class PyrogramSessionManager:
         logger.info(f"Connecting from session string for {phone}")
         
         try:
+            safe_phone = phone.replace("+", "").replace(" ", "")
             client = Client(
-                name=f"delivery_{phone}",
+                name=f"str_{safe_phone}",
                 api_id=self.api_id,
                 api_hash=self.api_hash,
                 session_string=session_string,
@@ -428,19 +557,102 @@ class PyrogramSessionManager:
             logger.error(f"Error connecting from session string: {e} (duration: {duration:.2f}s)")
             return False
     
+    async def connect_from_file(self, phone: str) -> bool:
+        """Connect using a session file on disk"""
+        start_time = time.time()
+        session_path = self._get_session_path(phone)
+        logger.info(f"Connecting from session file for {phone}: {session_path}")
+        
+        session_file = session_path + ".session"
+        if not os.path.exists(session_file):
+            logger.warning(f"Session file not found: {session_file}")
+            return False
+        
+        try:
+            client = Client(
+                name=session_path,
+                api_id=self.api_id,
+                api_hash=self.api_hash,
+                in_memory=False
+            )
+            await client.connect()
+            
+            me = await client.get_me()
+            if me:
+                self.active_clients[phone] = client
+                duration = time.time() - start_time
+                logger.info(f"Connected from file for {phone} (ID: {me.id}, duration: {duration:.2f}s)")
+                return True
+            else:
+                await client.disconnect()
+                return False
+                
+        except Exception as e:
+            duration = time.time() - start_time
+            logger.error(f"Error connecting from file: {e} (duration: {duration:.2f}s)")
+            return False
+    
     async def disconnect(self, phone: str):
-        client = self.active_clients.get(phone)
+        client = self.active_clients.pop(phone, None)
         if client:
             try:
                 await client.disconnect()
-                del self.active_clients[phone]
                 logger.info(f"Disconnected: {phone}")
             except Exception as e:
                 logger.error(f"Error disconnecting: {e}")
     
+    async def log_out(self, phone: str) -> bool:
+        """Log out and destroy the session"""
+        client = self.active_clients.get(phone)
+        if not client:
+            return False
+        try:
+            await client.log_out()
+            self.active_clients.pop(phone, None)
+            logger.info(f"Logged out: {phone}")
+            return True
+        except Exception as e:
+            logger.error(f"Error logging out: {e}")
+            return False
+    
     async def disconnect_all(self):
         for phone in list(self.active_clients.keys()):
             await self.disconnect(phone)
+    
+    async def cleanup_inactive_clients(self, max_idle_seconds: int = 300) -> int:
+        """
+        Disconnect clients that are no longer responsive to free RAM.
+        Returns number of cleaned up clients.
+        """
+        cleaned = 0
+        for phone in list(self.active_clients.keys()):
+            client = self.active_clients.get(phone)
+            if not client:
+                continue
+            try:
+                if not client.is_connected:
+                    self.active_clients.pop(phone, None)
+                    cleaned += 1
+                    logger.info(f"Cleaned disconnected client: {phone}")
+                    continue
+                # Quick ping to check if alive
+                await asyncio.wait_for(client.get_me(), timeout=5)
+            except (asyncio.TimeoutError, Exception):
+                try:
+                    await client.disconnect()
+                except:
+                    pass
+                self.active_clients.pop(phone, None)
+                cleaned += 1
+                logger.info(f"Cleaned dead client: {phone}")
+        
+        if cleaned > 0:
+            logger.info(f"Cleanup: removed {cleaned} inactive clients. Active: {len(self.active_clients)}")
+        return cleaned
+    
+    def get_active_count(self) -> int:
+        """Get number of active clients in memory"""
+        return len(self.active_clients)
     
     async def get_full_password_info(self, phone: str) -> Dict[str, Any]:
         """Get complete password/2FA information including email details"""

@@ -21,9 +21,8 @@ from sqlalchemy import select
 logger = get_logger("AuditAPI")
 router = APIRouter(prefix="/audit", tags=["Audit"])
 
-API_ID = 28907635
-API_HASH = "fa6c3335de68283781976ae20f813f73"
-OUR_EMAIL_DOMAIN = "channelsseller.site"
+from config import API_ID, API_HASH, EMAIL_DOMAIN
+OUR_EMAIL_DOMAIN = EMAIL_DOMAIN
 
 
 class AccountHealth(Enum):
@@ -101,37 +100,48 @@ async def check_telethon_session(phone: str) -> Dict[str, Any]:
     return {"active": False, "error": "Session dead or unauthorized"}
 
 
-async def get_account_emails_live(phone: str) -> Dict[str, Any]:
+async def get_account_emails_live(phone: str, known_password: str = None) -> Dict[str, Any]:
     """
     Get BOTH login email AND recovery email from Telegram
-    login_email_pattern = Email used for login (alternative to phone)
-    email_unconfirmed_pattern = Pending email change
-    has_recovery = Recovery email for 2FA password reset
+    login_email_pattern = Email used for login (alternative to phone) - SEPARATE feature!
+    email_unconfirmed_pattern = Pending recovery email change (2FA)
+    has_recovery = Recovery email for 2FA password reset (confirmed)
+    recovery_email_full = Full recovery email (only with known_password via getPasswordSettings)
     """
     manager = get_pyrogram()
     
     try:
-        security = await manager.get_security_info(phone)
+        security = await manager.get_security_info(phone, known_password=known_password)
         if security.get("status") != "success":
             return {"status": "error", "error": security.get("error")}
+        
+        recovery_email_full = security.get("recovery_email_full")
+        email_unconfirmed = security.get("email_unconfirmed_pattern")
+        has_recovery = security.get("has_recovery_email", False)
+        
+        # Determine recovery email status
+        recovery_status = "none"
+        if recovery_email_full:
+            recovery_status = "confirmed"
+        elif email_unconfirmed:
+            recovery_status = "pending"
+        elif has_recovery:
+            recovery_status = "confirmed_unknown"
         
         result = {
             "status": "success",
             "has_2fa": security.get("has_password", False),
-            "login_email": security.get("login_email_pattern"),
+            "recovery_email_full": recovery_email_full,
+            "recovery_email_status": recovery_status,
+            "email_unconfirmed_pattern": email_unconfirmed,
+            "has_recovery_email": has_recovery,
+            "login_email_pattern": security.get("login_email_pattern"),
             "login_email_status": "confirmed" if security.get("login_email_pattern") else "none",
-            "pending_email": security.get("email_unconfirmed_pattern"),
-            "has_recovery_email": security.get("has_recovery_email", False),
-            "recovery_email_pattern": None,
             "password_hint": security.get("password_hint"),
             "sessions_count": security.get("other_sessions_count", 0),
             "current_session": security.get("current_session"),
             "other_sessions": security.get("other_sessions", [])
         }
-        
-        if security.get("email_unconfirmed_pattern"):
-            result["login_email_status"] = "pending_confirmation"
-            result["pending_email"] = security["email_unconfirmed_pattern"]
         
         return result
         

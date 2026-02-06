@@ -47,14 +47,11 @@ from backend.models.database import (
     add_account, get_account, update_account, log_auth_action
 )
 from backend.api.webhook_routes import get_code_by_hash, email_codes_store
+from config import API_ID, API_HASH, EMAIL_DOMAIN
 
 logger = get_logger("RoutesV3")
 
 router = APIRouter(prefix="/api/v1", tags=["V3 API"])
-
-# API credentials
-API_ID = 28907635
-API_HASH = "fa6c3335de68283781976ae20f813f73"
 
 
 # ============== Request Models ==============
@@ -313,10 +310,8 @@ async def verify_auth(request: VerifyAuthRequest, req: Request):
                 
                 # Send log to bot - new account registered
                 try:
-                    from backend.log_bot import get_bot_app, log_new_account
-                    bot_app = get_bot_app()
-                    if bot_app:
-                        await log_new_account(bot_app, phone, telegram_id, email_info.get("email", ""))
+                    from backend.log_bot import log_new_account
+                    await log_new_account(phone, telegram_id, email_info.get("email", ""))
                 except:
                     pass
                 
@@ -416,29 +411,11 @@ async def audit_account(account_id: str, req: Request):
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
         
-        # Get security info
-        security_info = await manager.get_security_info(phone)
-        if security_info.get("status") == "error":
-            raise HTTPException(status_code=400, detail=security_info.get("error"))
-        
         # Get telegram_id
         telegram_id = account.telegram_id
         if not telegram_id:
             user_info = await manager.get_me_info(phone)
             telegram_id = user_info.get("id") if user_info.get("status") == "success" else None
-        
-        # Get transfer mode
-        mode = TransferMode.MODE_BOT_ONLY
-        if account.transfer_mode == DBTransferMode.USER_KEEPS_SESSION:
-            mode = TransferMode.MODE_USER_KEEPS_SESSION
-        
-        # Run audit
-        passed, issues, actions_needed = SecurityAuditService.run_audit(
-            security_info=security_info,
-            phone=phone,
-            mode=mode,
-            telegram_id=telegram_id
-        )
         
         # Generate our target email for this account
         if not account.target_email and telegram_id:
@@ -454,65 +431,61 @@ async def audit_account(account_id: str, req: Request):
             our_email = account.target_email or ""
             our_hash = account.email_hash or ""
         
-        # Check if email is already changed to ours
-        # Telegram returns email patterns in these fields:
-        # - email_unconfirmed_pattern: when email is set but not yet confirmed
-        # - login_email_pattern: login email (can be recovery email too)
-        # - has_recovery: True when recovery email is confirmed
-        email_unconfirmed = security_info.get("email_unconfirmed_pattern", "")
-        login_email = security_info.get("login_email_pattern", "")
+        # Try to pass known password for full recovery email check
+        # Use cached 2FA password from verify step, or stored generated password
+        known_password = get_cached_data(phone, "two_fa_password") or account.generated_password
+        
+        # Get security info (with password if available for full email check)
+        security_info = await manager.get_security_info(phone, known_password=known_password)
+        if security_info.get("status") == "error":
+            raise HTTPException(status_code=400, detail=security_info.get("error"))
+        
+        # Get transfer mode
+        mode = TransferMode.MODE_BOT_ONLY
+        if account.transfer_mode == DBTransferMode.USER_KEEPS_SESSION:
+            mode = TransferMode.MODE_USER_KEEPS_SESSION
+        
+        # Run audit (now with correct email separation)
+        passed, issues, actions_needed = SecurityAuditService.run_audit(
+            security_info=security_info,
+            phone=phone,
+            mode=mode,
+            telegram_id=telegram_id
+        )
+        
+        # Determine email status from security_info
+        recovery_email_full = security_info.get("recovery_email_full")
+        email_unconfirmed = security_info.get("email_unconfirmed_pattern")
         has_recovery = security_info.get("has_recovery_email", False)
         
         email_changed = False
         email_verified = False
-        current_email_pattern = email_unconfirmed or login_email or ""
         
-        our_domain = our_email.split("@")[-1] if "@" in our_email else ""
-        
-        # Check unconfirmed email pattern
-        if email_unconfirmed and our_domain:
-            if our_domain.lower() in email_unconfirmed.lower():
+        if recovery_email_full:
+            # We know the exact email - check if it's ours
+            if EMAIL_DOMAIN in recovery_email_full.lower():
                 email_changed = True
-                email_verified = False  # Not yet confirmed
-                logger.info(f"Email set to our domain (unconfirmed) for {phone}: {email_unconfirmed}")
-        
-        # Check login email pattern (this is the confirmed recovery email)
-        if login_email and our_domain:
-            if our_domain.lower() in login_email.lower():
+                email_verified = True
+                logger.info(f"[AUDIT] Recovery email IS ours: {recovery_email_full}")
+            else:
+                logger.warning(f"[AUDIT] Recovery email is NOT ours: {recovery_email_full}")
+        elif email_unconfirmed:
+            # Pending email - check pattern
+            if EMAIL_DOMAIN in str(email_unconfirmed).lower():
                 email_changed = True
-                email_verified = True  # Login email means it's confirmed
-                logger.info(f"Email confirmed with our domain for {phone}: {login_email}")
-        
-        # Fallback: If has_recovery is True and we previously set it
-        if not email_changed and has_recovery and account.email_changed:
-            email_changed = True
-            email_verified = True
-            logger.info(f"Email already confirmed (trusted from DB) for {phone}")
-        
-        # MANDATORY: Email must be changed to ours (unless already done)
-        if not email_changed:
-            # Add email change requirement to issues
-            email_issue = {
-                "type": "EMAIL_CHANGE_MANDATORY",
-                "severity": "blocker",
-                "title": "تغيير الإيميل إجباري",
-                "description": "يجب تغيير إيميل الاسترداد إلى إيميلنا قبل المتابعة",
-                "action": f"قم بتغيير الإيميل إلى: {our_email}",
-                "target_email": our_email,
-                "email_hash": our_hash,
-                "current_email": current_email_pattern or "غير محدد",
-                "auto_fixable": False,
-                "mandatory": True
-            }
-            issues.insert(0, email_issue)  # Add at beginning
-            passed = False  # Force fail until email is changed
+                email_verified = False
+                logger.info(f"[AUDIT] Our email pending confirmation: {email_unconfirmed}")
+        elif has_recovery and not known_password:
+            # Recovery email exists but we can't check it (no password)
+            # Do NOT trust DB flag blindly - flag as unknown
+            logger.warning(f"[AUDIT] Recovery email exists but unknown (no password to check)")
         
         # Update account with audit results
         await update_account(
             phone,
             status=AuthStatus.AUDIT_PASSED if passed else AuthStatus.AUDIT_FAILED,
             has_2fa=security_info.get("has_password", False),
-            has_recovery_email=security_info.get("has_recovery_email", False),
+            has_recovery_email=has_recovery,
             other_sessions_count=security_info.get("other_sessions_count", 0),
             audit_passed=passed,
             audit_issues=json.dumps(issues) if issues else None,
@@ -522,6 +495,12 @@ async def audit_account(account_id: str, req: Request):
         
         await log_auth_action(phone, "audit", "passed" if passed else "failed")
         
+        try:
+            from backend.log_bot import log_audit_result
+            await log_audit_result(phone, passed, len(issues))
+        except:
+            pass
+        
         # Format report
         report = SecurityAuditService.format_audit_report(passed, issues, actions_needed)
         report["account_id"] = phone
@@ -530,7 +509,9 @@ async def audit_account(account_id: str, req: Request):
         report["email_hash"] = our_hash
         report["email_changed"] = email_changed
         report["email_verified"] = email_verified
-        report["email_mandatory"] = not email_changed
+        report["recovery_email_full"] = recovery_email_full
+        report["email_unconfirmed_pattern"] = email_unconfirmed
+        report["login_email_pattern"] = security_info.get("login_email_pattern")
         report["transfer_mode"] = account.transfer_mode.value if account.transfer_mode else "bot_only"
         report["duration"] = time.time() - start_time
         
@@ -595,12 +576,18 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         
         # Get target email and check current recovery email status
         target_email = account.target_email
-        our_domain = "channelsseller.site"
         
-        # First check if recovery email is already ours
-        security_info = await manager.get_security_info(phone)
-        current_email_pattern = security_info.get("login_email_pattern") or security_info.get("email_unconfirmed_pattern")
-        email_is_ours = current_email_pattern and our_domain in str(current_email_pattern)
+        # Check if recovery email is already ours using full email (with password)
+        security_info = await manager.get_security_info(phone, known_password=current_2fa_password)
+        recovery_email_full = security_info.get("recovery_email_full")
+        email_unconfirmed = security_info.get("email_unconfirmed_pattern")
+        
+        # Determine if recovery email is ours
+        email_is_ours = False
+        if recovery_email_full and EMAIL_DOMAIN in recovery_email_full.lower():
+            email_is_ours = True
+        elif email_unconfirmed and EMAIL_DOMAIN in str(email_unconfirmed).lower():
+            email_is_ours = True  # Pending but it's ours
         
         # Enable/Change 2FA
         if account.has_2fa and current_2fa_password:
@@ -666,20 +653,92 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         
         # Send log to bot
         try:
-            from backend.log_bot import get_bot_app, log_password_set
-            bot_app = get_bot_app()
-            if bot_app:
-                await log_password_set(bot_app, phone, account.telegram_id, new_password)
+            from backend.log_bot import log_password_set
+            await log_password_set(phone, account.telegram_id, new_password)
         except:
             pass
         
-        # Export Pyrogram session
+        # Export Pyrogram session string
         pyrogram_session = await manager.export_session_string(phone)
+        if not pyrogram_session:
+            raise HTTPException(status_code=500, detail="Failed to export Pyrogram session string")
+        logger.info(f"Pyrogram session exported for {phone} (length: {len(pyrogram_session)})")
         
-        # Create Telethon session
+        # Create Telethon session automatically
         telethon_manager = get_telethon()
-        telethon_session = None
-        # TODO: Implement Telethon session creation
+        telethon_session_string = None
+        
+        from config import DEV_MODE
+        
+        try:
+            # Send code via Telethon (creates separate client)
+            telethon_result = await telethon_manager.send_code(phone)
+            
+            if telethon_result.get("status") == "already_logged_in":
+                telethon_session_string = await telethon_manager.export_session_string(phone)
+                logger.info(f"Telethon already logged in for {phone}")
+            elif telethon_result.get("status") == "code_sent":
+                # Wait for code
+                await asyncio.sleep(3)
+                
+                code = None
+                
+                if DEV_MODE:
+                    # DEV: Get code from Pyrogram (read from 777000)
+                    code = await manager.get_last_telegram_code(phone)
+                    logger.info(f"[DEV] Got code from Pyrogram for Telethon: {code}")
+                else:
+                    # PROD: Try email first, then Pyrogram fallback
+                    email_hash = account.email_hash
+                    if email_hash:
+                        for _ in range(10):
+                            code = get_code_by_hash(email_hash)
+                            if code:
+                                logger.info(f"[PROD] Got code from email for Telethon: {code}")
+                                break
+                            await asyncio.sleep(1)
+                    
+                    if not code:
+                        code = await manager.get_last_telegram_code(phone)
+                        logger.info(f"[PROD] Fallback: Got code from Pyrogram for Telethon: {code}")
+                
+                if code:
+                    verify_result = await telethon_manager.verify_code(phone, code)
+                    
+                    if verify_result.get("status") == "2fa_required":
+                        tfa_result = await telethon_manager.verify_2fa(phone, new_password)
+                        if tfa_result.get("status") == "logged_in":
+                            telethon_session_string = await telethon_manager.export_session_string(phone)
+                            logger.info(f"Telethon session created with 2FA for {phone}")
+                        else:
+                            logger.error(f"Telethon 2FA failed for {phone}: {tfa_result}")
+                    elif verify_result.get("status") == "logged_in":
+                        telethon_session_string = await telethon_manager.export_session_string(phone)
+                        logger.info(f"Telethon session created for {phone}")
+                    else:
+                        logger.error(f"Telethon code verify failed for {phone}: {verify_result}")
+                else:
+                    logger.error(f"Could not get Telegram code for Telethon session: {phone}")
+            else:
+                logger.error(f"Telethon send_code failed for {phone}: {telethon_result}")
+        except Exception as e:
+            logger.error(f"Failed to create Telethon session for {phone}: {e}")
+        
+        # CRITICAL: Telethon session must be created
+        if not telethon_session_string:
+            logger.error(f"FINALIZE BLOCKED: Telethon session string not created for {phone}")
+            raise HTTPException(
+                status_code=400, 
+                detail="Failed to create Telethon session. Please try again."
+            )
+        
+        logger.info(f"Telethon session string saved for {phone} (length: {len(telethon_session_string)})")
+        
+        try:
+            from backend.log_bot import log_session_registered
+            await log_session_registered(phone, "pyrogram+telethon")
+        except:
+            pass
         
         # Terminate other sessions if bot_only mode
         terminated_count = 0
@@ -700,18 +759,16 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             }
         )
         
-        # Update account
-        # Note: export_session_string returns string directly, not dict
-        # Use BOT_RECEIVED status - account received by bot from seller, ready for buyer
+        # Update account with session strings
         await update_account(
             phone,
             status=AuthStatus.COMPLETED,
             generated_password=new_password,
-            pyrogram_session=pyrogram_session if isinstance(pyrogram_session, str) else None,
-            telethon_session=telethon_session,
+            pyrogram_session=pyrogram_session,
+            telethon_session=telethon_session_string,
             completed_at=datetime.utcnow(),
-            delivery_status=DeliveryStatus.BOT_RECEIVED,  # Bot received from seller
-            has_2fa=True  # Mark as having 2FA since we just set it
+            delivery_status=DeliveryStatus.BOT_RECEIVED,
+            has_2fa=True
         )
         
         await log_auth_action(phone, "finalize", "success")
@@ -854,6 +911,62 @@ async def check_email_code(account_id: str, wait_seconds: int = 0):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/email/code-fallback/{account_id}")
+async def get_email_code_fallback(account_id: str):
+    """
+    Fallback: Try to read email verification code from Telegram messages (777000).
+    Used when email webhook doesn't receive the code.
+    """
+    phone = account_id
+    manager = get_pyrogram()
+    
+    try:
+        code = await manager.get_last_telegram_code(phone, max_age_seconds=300)
+        if code:
+            try:
+                from backend.log_bot import log_code_fallback
+                await log_code_fallback(phone, code)
+            except:
+                pass
+            return {"status": "received", "code": code, "source": "telegram_messages"}
+        else:
+            return {"status": "not_found", "message": "No recent code found in Telegram messages"}
+    except Exception as e:
+        logger.error(f"Error in code fallback: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+class ConfirmCodeRequest(BaseModel):
+    code: str
+
+
+@router.post("/email/confirm-code/{account_id}")
+async def confirm_recovery_email_with_code(account_id: str, request: ConfirmCodeRequest):
+    """
+    Confirm the pending recovery email using a verification code.
+    This calls account.ConfirmPasswordEmail on Telegram API.
+    """
+    phone = account_id
+    code = request.code.strip()
+    
+    if not code or len(code) < 5:
+        raise HTTPException(status_code=400, detail="Invalid code")
+    
+    manager = get_pyrogram()
+    
+    try:
+        result = await manager.confirm_recovery_email(phone, code)
+        
+        if result.get("status") == "success":
+            await update_account(phone, email_changed=True, email_verified=True)
+            return {"status": "success", "message": "Recovery email confirmed successfully"}
+        else:
+            return {"status": "error", "message": result.get("error", "Failed to confirm email")}
+    except Exception as e:
+        logger.error(f"Error confirming email code: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/email/confirm/{account_id}")
 async def confirm_email_changed(account_id: str):
     """
@@ -866,25 +979,48 @@ async def confirm_email_changed(account_id: str):
         raise HTTPException(status_code=404, detail="Account not found")
     
     manager = get_pyrogram()
+    our_email = account.target_email or ""
+    
+    # Try to get known password for full email check
+    known_password = get_cached_data(phone, "two_fa_password") or account.generated_password
     
     # Get current security info to verify email change
-    security_info = await manager.get_security_info(phone)
+    security_info = await manager.get_security_info(phone, known_password=known_password)
     if security_info.get("status") == "error":
         raise HTTPException(status_code=400, detail=security_info.get("error"))
     
-    current_email_pattern = security_info.get("recovery_email_pattern", "")
-    our_email = account.target_email or ""
+    # Check recovery email status
+    recovery_email_full = security_info.get("recovery_email_full")
+    email_unconfirmed = security_info.get("email_unconfirmed_pattern")
+    has_recovery = security_info.get("has_recovery_email", False)
     
-    # Check if email matches our pattern
-    # The pattern from Telegram is like "e***l@channelsseller.site"
     email_matches = False
-    if our_email and current_email_pattern:
-        our_domain = our_email.split("@")[-1] if "@" in our_email else ""
-        pattern_domain = current_email_pattern.split("@")[-1] if "@" in current_email_pattern else ""
-        email_matches = our_domain == pattern_domain
+    email_status = "unknown"
+    current_display = ""
+    
+    if recovery_email_full:
+        current_display = recovery_email_full
+        if EMAIL_DOMAIN in recovery_email_full.lower():
+            email_matches = True
+            email_status = "confirmed"
+    elif email_unconfirmed:
+        current_display = email_unconfirmed
+        if EMAIL_DOMAIN in str(email_unconfirmed).lower():
+            email_matches = True
+            email_status = "pending"
+    elif has_recovery:
+        email_status = "confirmed_unknown"
+        current_display = "مؤكد لكن غير معروف"
+    else:
+        email_status = "none"
+        current_display = "غير موجود"
     
     if email_matches:
-        await update_account(phone, email_changed=True, email_verified=True)
+        await update_account(
+            phone, 
+            email_changed=True, 
+            email_verified=(email_status == "confirmed")
+        )
         
         log_credentials(
             phone=phone,
@@ -893,12 +1029,9 @@ async def confirm_email_changed(account_id: str):
             telegram_id=account.telegram_id
         )
         
-        # Send log to bot
         try:
-            from backend.log_bot import get_bot_app, log_email_set
-            bot_app = get_bot_app()
-            if bot_app:
-                await log_email_set(bot_app, phone, account.telegram_id, our_email)
+            from backend.log_bot import log_email_set
+            await log_email_set(phone, account.telegram_id, our_email)
         except:
             pass
         
@@ -906,15 +1039,22 @@ async def confirm_email_changed(account_id: str):
             "status": "success",
             "message": "Email change verified",
             "email_changed": True,
-            "current_pattern": current_email_pattern
+            "email_status": email_status,
+            "recovery_email": recovery_email_full,
+            "email_unconfirmed_pattern": email_unconfirmed,
+            "login_email_pattern": security_info.get("login_email_pattern"),
         }
     else:
         return {
             "status": "not_changed",
-            "message": "Email not changed to our address yet",
+            "message": "إيميل الاسترداد لم يتغير لإيميلنا بعد",
             "email_changed": False,
-            "current_pattern": current_email_pattern,
-            "expected_email": our_email
+            "email_status": email_status,
+            "current_display": current_display,
+            "recovery_email": recovery_email_full,
+            "email_unconfirmed_pattern": email_unconfirmed,
+            "login_email_pattern": security_info.get("login_email_pattern"),
+            "expected_email": our_email,
         }
 
 
@@ -940,18 +1080,26 @@ async def check_sessions_health(account_id: str):
     # Check Telethon session
     telethon_valid = {"valid": False, "error": "Not implemented yet"}
     
-    # Get security info
-    security_info = await manager.get_security_info(phone)
+    # Get security info (with password for full email check)
+    known_password = account.generated_password
+    security_info = await manager.get_security_info(phone, known_password=known_password)
     security_valid = security_info.get("status") == "success"
     
-    # Verify email hasn't changed
-    current_email_pattern = security_info.get("recovery_email_pattern", "") if security_valid else ""
+    # Verify recovery email hasn't changed
     our_email = account.target_email or ""
     email_still_ours = False
-    if our_email and current_email_pattern:
-        our_domain = our_email.split("@")[-1] if "@" in our_email else ""
-        pattern_domain = current_email_pattern.split("@")[-1] if "@" in current_email_pattern else ""
-        email_still_ours = our_domain == pattern_domain
+    recovery_email_display = ""
+    
+    if security_valid:
+        recovery_email_full = security_info.get("recovery_email_full")
+        email_unconfirmed = security_info.get("email_unconfirmed_pattern")
+        
+        if recovery_email_full:
+            recovery_email_display = recovery_email_full
+            email_still_ours = EMAIL_DOMAIN in recovery_email_full.lower()
+        elif email_unconfirmed:
+            recovery_email_display = email_unconfirmed
+            email_still_ours = EMAIL_DOMAIN in str(email_unconfirmed).lower()
     
     # Count sessions
     other_sessions = security_info.get("other_sessions_count", 0) if security_valid else 0
@@ -990,7 +1138,7 @@ async def check_sessions_health(account_id: str):
                 "error": telethon_valid.get("error")
             },
             "email_unchanged": email_still_ours,
-            "current_email_pattern": current_email_pattern,
+            "recovery_email": recovery_email_display,
             "sessions_count": other_sessions,
             "sessions_ok": sessions_ok,
             "expected_max_sessions": expected_sessions + 2,
@@ -1154,11 +1302,17 @@ async def request_delivery_code(account_id: str):
         confirmation_deadline=datetime.utcnow() + timedelta(minutes=5)
     )
     
+    try:
+        from backend.log_bot import log_delivery_code_sent
+        await log_delivery_code_sent(phone)
+    except:
+        pass
+    
     return {
         "status": "success",
         "message": "Delivery code sent",
         "account_id": phone,
-        "two_fa_password": account.generated_password,
+        "has_2fa_password": bool(account.generated_password),
         "fallback_seconds": 20,
         "instructions": "User will receive code. If not received in 20 seconds, code will be fetched from email webhook."
     }
@@ -1180,24 +1334,56 @@ async def confirm_delivery(account_id: str, request: DeliveryConfirmRequest):
         return {"status": "cancelled", "message": "Delivery cancelled"}
     
     manager = get_pyrogram()
+    telethon_mgr = get_telethon()
     
-    # Disconnect Pyrogram session
+    # CRITICAL: Log out sessions BEFORE clearing from DB
+    # Not logging out leaves orphaned sessions on Telegram servers
+    pyrogram_logged_out = False
+    telethon_logged_out = False
+    
+    # Try Pyrogram logout
     try:
-        await manager.disconnect(phone)
-    except:
-        pass
+        if account.pyrogram_session:
+            connected = await manager.connect_from_string(phone, account.pyrogram_session)
+            if connected:
+                pyrogram_logged_out = await manager.log_out(phone)
+                logger.info(f"Pyrogram logout for {phone}: {pyrogram_logged_out}")
+            else:
+                await manager.disconnect(phone)
+        else:
+            await manager.disconnect(phone)
+    except Exception as e:
+        logger.warning(f"Pyrogram logout failed for {phone}: {e}")
+        try:
+            await manager.disconnect(phone)
+        except:
+            pass
     
-    # TODO: Disconnect Telethon session
+    # Try Telethon logout
+    try:
+        if account.telethon_session:
+            connected = await telethon_mgr.connect_from_string(phone, account.telethon_session)
+            if connected:
+                telethon_logged_out = await telethon_mgr.log_out(phone)
+                logger.info(f"Telethon logout for {phone}: {telethon_logged_out}")
+            else:
+                await telethon_mgr.disconnect(phone)
+    except Exception as e:
+        logger.warning(f"Telethon logout failed for {phone}: {e}")
+        try:
+            await telethon_mgr.disconnect(phone)
+        except:
+            pass
     
     # Update delivery count
     new_count = (account.delivery_count or 0) + 1
     
     await update_account(
         phone,
-        delivery_status=DeliveryStatus.BUYER_DELIVERED,  # Delivered to buyer
+        delivery_status=DeliveryStatus.BUYER_DELIVERED,
         delivered_at=datetime.utcnow(),
         delivery_count=new_count,
-        pyrogram_session=None,  # Clear session
+        pyrogram_session=None,
         telethon_session=None
     )
     
@@ -1210,11 +1396,248 @@ async def confirm_delivery(account_id: str, request: DeliveryConfirmRequest):
     
     await log_auth_action(phone, "delivery_confirm", "success", f"Delivery #{new_count}")
     
+    try:
+        from backend.log_bot import log_delivery
+        await log_delivery(phone, account.telegram_id, new_count)
+    except:
+        pass
+    
     return {
         "status": "success",
         "message": f"Delivery #{new_count} confirmed",
         "account_id": phone,
         "delivery_number": new_count
+    }
+
+
+# ============== Security Check Endpoint ==============
+
+@router.get("/security/check/{account_id}")
+async def security_check(account_id: str):
+    """
+    Deep security check: device info, session anomalies, red flags.
+    Returns threat level and detailed findings.
+    """
+    phone = account_id
+    account = await get_account(phone)
+    
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    manager = get_pyrogram()
+    known_password = account.generated_password
+    
+    # Connect if needed
+    if phone not in manager.active_clients and account.pyrogram_session:
+        try:
+            await manager.connect_from_string(phone, account.pyrogram_session)
+        except:
+            raise HTTPException(status_code=400, detail="Cannot connect to session")
+    
+    security_info = await manager.get_security_info(phone, known_password=known_password)
+    if security_info.get("status") != "success":
+        raise HTTPException(status_code=400, detail=security_info.get("error", "Failed"))
+    
+    red_flags = []
+    warnings = []
+    
+    # --- Check sessions ---
+    other_sessions = security_info.get("other_sessions", [])
+    our_api_id = manager.api_id
+    
+    for sess in other_sessions:
+        sess_flags = []
+        
+        # Unknown API ID (not ours)
+        if sess.get("api_id") and sess["api_id"] != our_api_id:
+            sess_flags.append(f"API ID مختلف: {sess['api_id']}")
+        
+        # Non-official app
+        if not sess.get("is_official_app"):
+            sess_flags.append("تطبيق غير رسمي")
+        
+        # Suspicious device names
+        device = (sess.get("device_model") or "").lower()
+        suspicious_devices = ["termux", "userbot", "pyrogram", "telethon", "bot"]
+        for sd in suspicious_devices:
+            if sd in device:
+                sess_flags.append(f"جهاز مشبوه: {sess.get('device_model')}")
+                break
+        
+        if sess_flags:
+            red_flags.append({
+                "type": "suspicious_session",
+                "device": sess.get("device_model"),
+                "platform": sess.get("platform"),
+                "app": sess.get("app_name"),
+                "ip": sess.get("ip"),
+                "country": sess.get("country"),
+                "created": sess.get("date_created"),
+                "last_active": sess.get("date_active"),
+                "issues": sess_flags
+            })
+    
+    # --- Check email ---
+    recovery_email_full = security_info.get("recovery_email_full")
+    email_unconfirmed = security_info.get("email_unconfirmed_pattern")
+    has_recovery = security_info.get("has_recovery_email", False)
+    
+    if recovery_email_full and EMAIL_DOMAIN not in recovery_email_full.lower():
+        red_flags.append({
+            "type": "email_changed",
+            "message": f"إيميل الاسترداد تغير لـ: {recovery_email_full}",
+            "severity": "critical"
+        })
+    elif has_recovery and not recovery_email_full and not email_unconfirmed:
+        warnings.append({
+            "type": "email_unknown",
+            "message": "إيميل الاسترداد موجود لكن لا نستطيع التحقق منه"
+        })
+    elif not has_recovery and not email_unconfirmed:
+        warnings.append({
+            "type": "no_recovery_email",
+            "message": "لا يوجد إيميل استرداد"
+        })
+    
+    # --- Check 2FA ---
+    if not security_info.get("has_password"):
+        red_flags.append({
+            "type": "2fa_disabled",
+            "message": "التحقق بخطوتين معطل!",
+            "severity": "critical"
+        })
+    
+    # --- Check pending password reset ---
+    if security_info.get("pending_reset_date"):
+        red_flags.append({
+            "type": "pending_reset",
+            "message": f"هناك طلب إعادة تعيين كلمة مرور معلق!",
+            "severity": "critical"
+        })
+    
+    # --- Determine threat level ---
+    critical_count = sum(1 for f in red_flags if f.get("severity") == "critical")
+    threat_level = "safe"
+    if critical_count > 0:
+        threat_level = "critical"
+    elif len(red_flags) > 0:
+        threat_level = "warning"
+    elif len(warnings) > 0:
+        threat_level = "low"
+    
+    # --- Auto-freeze if critical ---
+    frozen = False
+    if threat_level == "critical" and account.pyrogram_session:
+        # Change 2FA and terminate suspicious sessions
+        try:
+            if security_info.get("has_password") and known_password:
+                new_pass = generate_strong_password(24)
+                change_result = await manager.change_2fa_password(phone, known_password, new_pass)
+                if change_result.get("status") == "success":
+                    await update_account(phone, generated_password=new_pass)
+                    frozen = True
+                    logger.warning(f"FROZEN: 2FA changed for {phone} due to critical threat")
+            
+            # Terminate suspicious sessions
+            for sess in other_sessions:
+                if sess.get("api_id") != our_api_id:
+                    try:
+                        client = manager.active_clients.get(phone)
+                        if client:
+                            await client.invoke(
+                                functions.account.ResetAuthorization(hash=sess["hash"])
+                            )
+                            logger.warning(f"Terminated suspicious session for {phone}: {sess.get('device_model')}")
+                    except:
+                        pass
+        except Exception as e:
+            logger.error(f"Auto-freeze failed for {phone}: {e}")
+    
+    # Log security check to Telegram
+    try:
+        from backend.log_bot import log_security_check as log_sec
+        flag_texts = [f.get("message", f.get("type", "?")) for f in red_flags]
+        await log_sec(phone, threat_level, flag_texts, frozen)
+    except:
+        pass
+    
+    # Disconnect to free RAM
+    await manager.disconnect(phone)
+    
+    return {
+        "status": "success",
+        "account_id": phone,
+        "threat_level": threat_level,
+        "frozen": frozen,
+        "red_flags": red_flags,
+        "warnings": warnings,
+        "session_count": len(other_sessions) + 1,
+        "other_sessions_count": len(other_sessions),
+        "has_2fa": security_info.get("has_password", False),
+        "recovery_email": recovery_email_full,
+        "recovery_email_status": "confirmed" if recovery_email_full else ("pending" if email_unconfirmed else "none"),
+    }
+
+
+# ============== Connection Management Endpoints ==============
+
+@router.get("/admin/connections")
+async def get_connections_status():
+    """
+    Monitor active connections in memory.
+    Shows Pyrogram and Telethon active clients count.
+    """
+    manager = get_pyrogram()
+    telethon_mgr = get_telethon()
+    
+    pyrogram_clients = list(manager.active_clients.keys())
+    telethon_clients = list(telethon_mgr.active_clients.keys())
+    
+    return {
+        "status": "success",
+        "pyrogram_active": len(pyrogram_clients),
+        "pyrogram_phones": pyrogram_clients,
+        "telethon_active": len(telethon_clients),
+        "telethon_phones": telethon_clients,
+        "total_active": len(pyrogram_clients) + len(telethon_clients)
+    }
+
+
+@router.post("/admin/connections/cleanup")
+async def cleanup_connections():
+    """
+    Clean up dead/inactive connections to free RAM.
+    Disconnects clients that are no longer responsive.
+    """
+    manager = get_pyrogram()
+    telethon_mgr = get_telethon()
+    
+    pyrogram_cleaned = await manager.cleanup_inactive_clients()
+    
+    # Telethon cleanup
+    telethon_cleaned = 0
+    for phone in list(telethon_mgr.active_clients.keys()):
+        client = telethon_mgr.active_clients.get(phone)
+        if not client:
+            continue
+        try:
+            if not client.is_connected():
+                telethon_mgr.active_clients.pop(phone, None)
+                telethon_cleaned += 1
+        except:
+            try:
+                await client.disconnect()
+            except:
+                pass
+            telethon_mgr.active_clients.pop(phone, None)
+            telethon_cleaned += 1
+    
+    return {
+        "status": "success",
+        "pyrogram_cleaned": pyrogram_cleaned,
+        "telethon_cleaned": telethon_cleaned,
+        "pyrogram_remaining": len(manager.active_clients),
+        "telethon_remaining": len(telethon_mgr.active_clients)
     }
 
 
@@ -1293,6 +1716,7 @@ async def get_all_accounts_admin():
 async def get_account_details_admin(account_id: str):
     """
     Get full details of a specific account (Admin endpoint)
+    Includes LIVE session and email checks via Pyrogram/Telethon
     """
     phone = account_id
     account = await get_account(phone)
@@ -1300,14 +1724,93 @@ async def get_account_details_admin(account_id: str):
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     
-    # Check session status
     manager = get_pyrogram()
-    session_status = "unknown"
+    telethon_mgr = get_telethon()
+    
+    # ---- Live Pyrogram session check ----
+    pyrogram_status = "inactive"
+    pyrogram_connected = False
     try:
+        # Try connecting from stored session string
+        if account.pyrogram_session and phone not in manager.active_clients:
+            connected = await manager.connect_from_string(phone, account.pyrogram_session)
+            if connected:
+                pyrogram_connected = True
+        
         check = await manager.get_me_info(phone)
-        session_status = "active" if check.get("status") == "success" else "inactive"
+        if check.get("status") == "success":
+            pyrogram_status = "active"
+            pyrogram_connected = True
     except:
-        session_status = "inactive"
+        pyrogram_status = "inactive"
+    
+    # ---- Live Telethon session check ----
+    telethon_status = "inactive"
+    telethon_connected = False
+    try:
+        if account.telethon_session and phone not in telethon_mgr.active_clients:
+            connected = await telethon_mgr.connect_from_string(phone, account.telethon_session)
+            if connected:
+                telethon_connected = True
+        
+        tcheck = await telethon_mgr.get_me_info(phone)
+        if tcheck.get("status") == "success":
+            telethon_status = "active"
+            telethon_connected = True
+    except:
+        telethon_status = "inactive"
+    
+    # ---- Live email & security info (only if Pyrogram is connected) ----
+    recovery_email_full = None
+    recovery_email_status = "none"  # none / confirmed / pending / unknown
+    pending_email = None
+    login_email_pattern = None
+    has_recovery_email = False
+    is_our_email = False
+    sessions_count = 0
+    sessions_detail = []
+    has_2fa_live = False
+    
+    if pyrogram_connected:
+        try:
+            # Pass known password to get full recovery email
+            known_password = account.generated_password
+            security_info = await manager.get_security_info(phone, known_password=known_password)
+            if security_info.get("status") == "success":
+                has_2fa_live = security_info.get("has_password", False)
+                has_recovery_email = security_info.get("has_recovery_email", False)
+                sessions_count = security_info.get("other_sessions_count", 0)
+                sessions_detail = security_info.get("other_sessions", [])
+                
+                # Recovery email (2FA) - separate from login email!
+                recovery_email_full = security_info.get("recovery_email_full")
+                uep = security_info.get("email_unconfirmed_pattern")
+                
+                if recovery_email_full:
+                    recovery_email_status = "confirmed"
+                    is_our_email = EMAIL_DOMAIN in recovery_email_full.lower()
+                elif uep:
+                    pending_email = uep
+                    recovery_email_status = "pending"
+                elif has_recovery_email:
+                    recovery_email_status = "unknown"  # Confirmed but couldn't fetch full
+                
+                # Login email (separate feature!)
+                login_email_pattern = security_info.get("login_email_pattern")
+        except Exception as e:
+            logger.warning(f"Failed to get live security info for {phone}: {e}")
+    
+    # ---- Disconnect after checks to free RAM ----
+    if pyrogram_connected and account.status == AuthStatus.COMPLETED:
+        try:
+            await manager.disconnect(phone)
+        except:
+            pass
+    if telethon_connected and account.status == AuthStatus.COMPLETED:
+        try:
+            await telethon_mgr.disconnect(phone)
+        except:
+            pass
     
     return {
         "status": "success",
@@ -1320,11 +1823,20 @@ async def get_account_details_admin(account_id: str):
             "target_email": account.target_email,
             "email_hash": account.email_hash,
             "email_changed": account.email_changed or False,
-            "has_2fa": account.has_2fa or False,
+            "has_2fa": has_2fa_live if pyrogram_connected else (account.has_2fa or False),
             "audit_passed": account.audit_passed or False,
             "has_pyrogram_session": account.pyrogram_session is not None,
             "has_telethon_session": account.telethon_session is not None,
-            "session_status": session_status,
+            "pyrogram_status": pyrogram_status,
+            "telethon_status": telethon_status,
+            "sessions_count": sessions_count,
+            "sessions_detail": sessions_detail,
+            "recovery_email": recovery_email_full,
+            "recovery_email_status": recovery_email_status,
+            "pending_email": pending_email,
+            "login_email_pattern": login_email_pattern,
+            "has_recovery_email": has_recovery_email,
+            "is_our_email": is_our_email,
             "delivery_status": account.delivery_status.value if account.delivery_status else None,
             "delivery_count": account.delivery_count or 0,
             "created_at": account.created_at.isoformat() if account.created_at else None,
@@ -1390,6 +1902,12 @@ async def fix_account_admin(account_id: str, request: dict = None):
             for key, value in updates.items():
                 setattr(account, key, value)
             await session.commit()
+            
+            try:
+                from backend.log_bot import log_admin_action
+                await log_admin_action("FIX", phone, ", ".join(f"{k}={v}" for k, v in updates.items()))
+            except:
+                pass
         
         return {
             "status": "success",
@@ -1450,6 +1968,174 @@ async def get_account_raw_admin(account_id: str):
                 "delivered_at": account.delivered_at.isoformat() if account.delivered_at else None
             }
         }
+
+
+# ============== Account Delete + Session Terminate Endpoints ==============
+
+@router.delete("/admin/account/{account_id}")
+async def delete_account_admin(account_id: str):
+    """Delete account from DB. Logs out sessions first."""
+    from backend.models.database import async_session, Account
+    from sqlalchemy import delete as sql_delete
+    
+    phone = account_id
+    account = await get_account(phone)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    manager = get_pyrogram()
+    telethon_mgr = get_telethon()
+    logout_results = []
+    
+    # Logout Pyrogram
+    try:
+        if account.pyrogram_session:
+            if phone not in manager.active_clients:
+                await manager.connect_from_string(phone, account.pyrogram_session)
+            if phone in manager.active_clients:
+                await manager.active_clients[phone].log_out()
+                manager.active_clients.pop(phone, None)
+                logout_results.append("pyrogram_logged_out")
+    except Exception as e:
+        logout_results.append(f"pyrogram_error: {e}")
+        try: await manager.disconnect(phone)
+        except: pass
+    
+    # Logout Telethon
+    try:
+        if account.telethon_session:
+            if phone not in telethon_mgr.active_clients:
+                await telethon_mgr.connect_from_string(phone, account.telethon_session)
+            if phone in telethon_mgr.active_clients:
+                await telethon_mgr.active_clients[phone].log_out()
+                telethon_mgr.active_clients.pop(phone, None)
+                logout_results.append("telethon_logged_out")
+    except Exception as e:
+        logout_results.append(f"telethon_error: {e}")
+        try: await telethon_mgr.disconnect(phone)
+        except: pass
+    
+    # Delete from DB
+    async with async_session() as session:
+        await session.execute(sql_delete(Account).where(Account.phone == phone))
+        await session.commit()
+    
+    await log_auth_action(phone, "account_deleted", "success", "; ".join(logout_results))
+    logger.info(f"Account {phone} deleted from DB")
+    
+    try:
+        from backend.log_bot import log_account_deleted
+        await log_account_deleted(phone, account.telegram_id)
+    except:
+        pass
+    
+    return {"status": "success", "message": f"Account {phone} deleted", "logout_results": logout_results}
+
+
+@router.post("/admin/account/{account_id}/terminate-session")
+async def terminate_session_admin(account_id: str, request: dict = None):
+    """Terminate a specific other session by hash, or all other sessions."""
+    phone = account_id
+    account = await get_account(phone)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    manager = get_pyrogram()
+    
+    # Connect if needed
+    if phone not in manager.active_clients and account.pyrogram_session:
+        connected = await manager.connect_from_string(phone, account.pyrogram_session)
+        if not connected:
+            raise HTTPException(status_code=400, detail="Cannot connect session")
+    
+    client = manager.active_clients.get(phone)
+    if not client:
+        raise HTTPException(status_code=400, detail="No active session")
+    
+    from pyrogram.raw import functions
+    
+    session_hash = request.get("session_hash") if request else None
+    terminate_all = request.get("terminate_all", False) if request else False
+    
+    terminated = 0
+    try:
+        if terminate_all:
+            auths = await client.invoke(functions.account.GetAuthorizations())
+            for auth in auths.authorizations:
+                if not auth.current:
+                    try:
+                        await client.invoke(functions.account.ResetAuthorization(hash=auth.hash))
+                        terminated += 1
+                    except:
+                        pass
+        elif session_hash:
+            await client.invoke(functions.account.ResetAuthorization(hash=int(session_hash)))
+            terminated = 1
+        else:
+            raise HTTPException(status_code=400, detail="Provide session_hash or terminate_all=true")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    await manager.disconnect(phone)
+    await log_auth_action(phone, "terminate_session", "success", f"Terminated {terminated} sessions")
+    
+    try:
+        from backend.log_bot import log_session_terminated
+        scope = "all" if terminate_all else f"hash:{session_hash}"
+        await log_session_terminated(phone, terminated, scope)
+    except:
+        pass
+    
+    return {"status": "success", "terminated": terminated}
+
+
+@router.post("/admin/account/{account_id}/logout-our-sessions")
+async def logout_our_sessions_admin(account_id: str):
+    """Logout OUR Pyrogram+Telethon sessions (without deleting from DB)."""
+    phone = account_id
+    account = await get_account(phone)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    manager = get_pyrogram()
+    telethon_mgr = get_telethon()
+    results = []
+    
+    try:
+        if account.pyrogram_session:
+            if phone not in manager.active_clients:
+                await manager.connect_from_string(phone, account.pyrogram_session)
+            if phone in manager.active_clients:
+                await manager.active_clients[phone].log_out()
+                manager.active_clients.pop(phone, None)
+                results.append("pyrogram_logged_out")
+    except Exception as e:
+        results.append(f"pyrogram_error: {e}")
+    
+    try:
+        if account.telethon_session:
+            if phone not in telethon_mgr.active_clients:
+                await telethon_mgr.connect_from_string(phone, account.telethon_session)
+            if phone in telethon_mgr.active_clients:
+                await telethon_mgr.active_clients[phone].log_out()
+                telethon_mgr.active_clients.pop(phone, None)
+                results.append("telethon_logged_out")
+    except Exception as e:
+        results.append(f"telethon_error: {e}")
+    
+    # Clear sessions from DB
+    await update_account(phone, pyrogram_session=None, telethon_session=None)
+    await log_auth_action(phone, "logout_our_sessions", "success", "; ".join(results))
+    
+    try:
+        from backend.log_bot import log_admin_action
+        await log_admin_action("LOGOUT_OUR_SESSIONS", phone, "; ".join(results))
+    except:
+        pass
+    
+    return {"status": "success", "results": results}
 
 
 # ============== Documentation Endpoint ==============

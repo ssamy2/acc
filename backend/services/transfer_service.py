@@ -30,7 +30,8 @@ logger = get_logger("TransferService")
 
 
 # Email domain configuration
-OUR_EMAIL_DOMAIN = "channelsseller.site"
+from config import EMAIL_DOMAIN
+OUR_EMAIL_DOMAIN = EMAIL_DOMAIN
 
 
 class TransferStep(Enum):

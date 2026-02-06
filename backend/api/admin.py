@@ -19,8 +19,7 @@ from sqlalchemy import select
 logger = get_logger("AdminAPI")
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
-API_ID = 28907635
-API_HASH = "fa6c3335de68283781976ae20f813f73"
+from config import API_ID, API_HASH
 
 
 def get_pyrogram():
@@ -113,11 +112,13 @@ async def get_account_details(account_id: str):
             "pyrogram_status": "active" if pyrogram["active"] else "inactive",
             "telethon_status": "active" if telethon["active"] else "inactive",
             "session_status": "active" if pyrogram["active"] and telethon["active"] else "inactive",
-            "login_email": emails.get("login_email"),
+            "recovery_email": emails.get("recovery_email_full"),
+            "recovery_email_status": emails.get("recovery_email_status", "none"),
+            "is_our_recovery_email": emails.get("is_our_recovery_email", False),
+            "login_email_pattern": emails.get("login_email_pattern"),
             "login_email_status": emails.get("login_email_status"),
-            "pending_email": emails.get("pending_email"),
+            "email_unconfirmed_pattern": emails.get("email_unconfirmed_pattern"),
             "has_recovery_email": emails.get("has_recovery_email"),
-            "is_our_email": emails.get("is_our_login_email", False),
             "sessions_count": emails.get("sessions_count", 0),
             "delivery_status": account.delivery_status.value if account.delivery_status else None,
             "delivery_count": account.delivery_count or 0,

@@ -21,8 +21,7 @@ from backend.models.database import (
 logger = get_logger("AuthAPI")
 router = APIRouter(tags=["Authentication"])
 
-API_ID = 28907635
-API_HASH = "fa6c3335de68283781976ae20f813f73"
+from config import API_ID, API_HASH
 
 session_cache: Dict[str, Dict] = {}
 SESSION_TIMEOUT_SECONDS = 30 * 60

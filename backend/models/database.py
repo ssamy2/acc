@@ -6,7 +6,12 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 import enum
 
-DATABASE_URL = "sqlite+aiosqlite:///./escrow_accounts.db"
+# Get absolute path to database
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DB_PATH = os.path.join(BASE_DIR, "escrow_accounts.db")
+DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
+
+print(f"📁 Database path: {DB_PATH}")
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 async_session = sessionmaker(

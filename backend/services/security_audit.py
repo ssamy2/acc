@@ -20,6 +20,7 @@ from typing import Dict, List, Tuple, Any
 from enum import Enum
 from backend.core_engine.logger import get_logger, log_audit
 from backend.core_engine.credentials_logger import get_full_email_info
+from config import EMAIL_DOMAIN
 
 logger = get_logger("SecurityAudit")
 
@@ -31,7 +32,7 @@ class TransferMode(Enum):
 
 
 # Our domain for email redirection
-OUR_EMAIL_DOMAIN = "channelsseller.site"
+OUR_EMAIL_DOMAIN = EMAIL_DOMAIN
 
 
 class SecurityAuditService:
@@ -81,55 +82,105 @@ class SecurityAuditService:
             log_audit(logger, phone, "2FA Check", True, "No 2FA set - will enable with new password")
             actions_needed["change_password"] = True  # We'll set a new password
         
-        # ========== Email Check ==========
+        # ========== Recovery Email Check (2FA) ==========
+        # Official Telegram API:
+        # - has_recovery_email = True → recovery email is SET and CONFIRMED (pattern hidden!)
+        # - email_unconfirmed_pattern → recovery email set but NOT YET confirmed (pattern visible)
+        # - recovery_email_full → full email from account.getPasswordSettings (if password known)
+        # - login_email_pattern → LOGIN email (completely separate from recovery email!)
+        
         has_recovery_email = security_info.get("has_recovery_email", False)
         email_unconfirmed_pattern = security_info.get("email_unconfirmed_pattern")
+        recovery_email_full = security_info.get("recovery_email_full")  # Full email if password was provided
         login_email_pattern = security_info.get("login_email_pattern")
         
-        # Current email pattern (masked)
-        current_email = email_unconfirmed_pattern or login_email_pattern or None
-        
-        if has_recovery_email or email_unconfirmed_pattern:
-            # Check if it's already our email
-            if current_email and OUR_EMAIL_DOMAIN in str(current_email):
-                log_audit(logger, phone, "Recovery Email Check", True, f"Already using our email: {current_email}")
+        if recovery_email_full:
+            # We have the full recovery email - check if it's ours
+            if OUR_EMAIL_DOMAIN in recovery_email_full.lower():
+                log_audit(logger, phone, "Recovery Email (2FA)", True, f"Our email confirmed: {recovery_email_full}")
             else:
                 issue = {
-                    "type": "RECOVERY_EMAIL_CHANGE_REQUIRED",
-                    "severity": "action_required",
-                    "title": "Recovery email must be changed",
-                    "description": f"Current email pattern: {current_email or 'confirmed but hidden'}. Must change to our email.",
-                    "action": f"Change recovery email to: {actions_needed.get('our_email', 'email-for-S<ID>@' + OUR_EMAIL_DOMAIN)}",
-                    "current_email": current_email,
+                    "type": "RECOVERY_EMAIL_NOT_OURS",
+                    "severity": "blocker",
+                    "title": "إيميل استرداد 2FA ليس إيميلنا",
+                    "description": f"الإيميل الحالي: {recovery_email_full} - يجب تغييره لإيميلنا",
+                    "action": f"يجب تغيير إيميل استرداد 2FA إلى: {actions_needed.get('our_email', 'N/A')}",
+                    "current_email": recovery_email_full,
                     "target_email": actions_needed.get("our_email"),
                     "auto_fixable": True
                 }
                 issues.append(issue)
                 actions_needed["change_email"] = True
-                log_audit(logger, phone, "Recovery Email Check", False, f"Email change required: {current_email} -> our email")
-        else:
-            # No recovery email set - we need to set one
-            log_audit(logger, phone, "Recovery Email Check", True, "No recovery email - will set our email")
-            actions_needed["change_email"] = True
+                log_audit(logger, phone, "Recovery Email (2FA)", False, f"NOT our email: {recovery_email_full}")
         
-        # ========== Login Email Check ==========
-        if login_email_pattern:
-            if OUR_EMAIL_DOMAIN in str(login_email_pattern):
-                log_audit(logger, phone, "Login Email Check", True, f"Already using our login email: {login_email_pattern}")
-            else:
+        elif email_unconfirmed_pattern:
+            # Recovery email is pending confirmation - check the pattern
+            if OUR_EMAIL_DOMAIN in str(email_unconfirmed_pattern).lower():
+                log_audit(logger, phone, "Recovery Email (2FA)", True, f"Our email pending confirmation: {email_unconfirmed_pattern}")
+                # Email is ours but needs confirmation - auto-fixable
                 issue = {
-                    "type": "LOGIN_EMAIL_CHANGE_REQUIRED",
+                    "type": "RECOVERY_EMAIL_PENDING_CONFIRMATION",
                     "severity": "action_required",
-                    "title": f"Login email detected ({login_email_pattern})",
-                    "description": "Login email should be changed or removed",
-                    "action": "Change or remove login email in Settings > Privacy & Security > Email Login",
-                    "current_email": login_email_pattern,
-                    "auto_fixable": False  # Login email is different from recovery email
+                    "title": "إيميل الاسترداد بانتظار التأكيد",
+                    "description": f"الإيميل {email_unconfirmed_pattern} ينتظر كود التأكيد",
+                    "action": "سيتم تأكيد الإيميل تلقائياً عند استلام الكود",
+                    "auto_fixable": True
                 }
                 issues.append(issue)
-                log_audit(logger, phone, "Login Email Check", False, f"Login email: {login_email_pattern}")
+            else:
+                issue = {
+                    "type": "RECOVERY_EMAIL_WRONG_PENDING",
+                    "severity": "blocker",
+                    "title": "إيميل استرداد خاطئ بانتظار التأكيد",
+                    "description": f"الإيميل المعلق: {email_unconfirmed_pattern} - ليس إيميلنا",
+                    "action": f"يجب إلغاء الإيميل المعلق وتغييره إلى: {actions_needed.get('our_email', 'N/A')}",
+                    "current_email": email_unconfirmed_pattern,
+                    "target_email": actions_needed.get("our_email"),
+                    "auto_fixable": True
+                }
+                issues.append(issue)
+                actions_needed["change_email"] = True
+                log_audit(logger, phone, "Recovery Email (2FA)", False, f"Wrong pending email: {email_unconfirmed_pattern}")
+        
+        elif has_recovery_email:
+            # Recovery email is confirmed but we DON'T know what it is
+            # (pattern is hidden when confirmed in account.getPassword)
+            # If we don't have the password to check, we must flag this as unknown
+            issue = {
+                "type": "RECOVERY_EMAIL_UNKNOWN",
+                "severity": "blocker",
+                "title": "إيميل استرداد مؤكد لكن غير معروف",
+                "description": "يوجد إيميل استرداد مؤكد لكن لا نستطيع التحقق منه بدون كلمة المرور",
+                "action": f"يجب تغيير إيميل الاسترداد إلى: {actions_needed.get('our_email', 'N/A')}",
+                "target_email": actions_needed.get("our_email"),
+                "auto_fixable": True  # Will be changed during finalize
+            }
+            issues.append(issue)
+            actions_needed["change_email"] = True
+            log_audit(logger, phone, "Recovery Email (2FA)", False, "Confirmed but unknown - must change")
+        
         else:
-            log_audit(logger, phone, "Login Email Check", True, "No login email set")
+            # No recovery email at all - we'll set one during finalize
+            log_audit(logger, phone, "Recovery Email (2FA)", True, "No recovery email - will set ours during finalize")
+            actions_needed["change_email"] = True
+        
+        # ========== Login Email Check (separate from recovery!) ==========
+        # login_email_pattern is for "Sign in with email" feature
+        # This is a completely different email from the 2FA recovery email
+        if login_email_pattern:
+            issue = {
+                "type": "LOGIN_EMAIL_EXISTS",
+                "severity": "action_required",
+                "title": f"يوجد إيميل تسجيل دخول: {login_email_pattern}",
+                "description": "إيميل تسجيل الدخول (ميزة منفصلة عن إيميل استرداد 2FA) - يُفضل إزالته",
+                "action": "إزالة إيميل تسجيل الدخول من: الإعدادات > الخصوصية والأمان > تسجيل الدخول بالإيميل",
+                "current_email": login_email_pattern,
+                "auto_fixable": False
+            }
+            issues.append(issue)
+            log_audit(logger, phone, "Login Email", False, f"Login email exists: {login_email_pattern}")
+        else:
+            log_audit(logger, phone, "Login Email", True, "No login email set")
         
         # ========== Sessions Check ==========
         other_sessions = security_info.get("other_sessions", [])

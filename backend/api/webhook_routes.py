@@ -25,13 +25,24 @@ email_codes_store: Dict[str, Dict[str, Any]] = {}
 received_codes = email_codes_store
 
 
+CODE_EXPIRY_SECONDS = 600  # Codes expire after 10 minutes
+
+
 def get_code_by_hash(email_hash: str) -> Optional[str]:
     """
     Get verification code by email hash (non-async helper function)
-    Returns the code if found, None otherwise
+    Returns the code if found and not expired, None otherwise
     """
     if email_hash in email_codes_store:
         data = email_codes_store[email_hash]
+        # Check expiry
+        received_at = data.get("received_at")
+        if received_at:
+            age = (datetime.now() - received_at).total_seconds()
+            if age > CODE_EXPIRY_SECONDS:
+                logger.warning(f"Code expired for hash {email_hash} (age: {age:.0f}s)")
+                del email_codes_store[email_hash]
+                return None
         return data.get("code")
     return None
 
@@ -147,6 +158,13 @@ async def receive_email_webhook(request: Request):
                 "subject": subject,
                 "raw_body": body
             }
+            
+            # Send log to Telegram
+            try:
+                from backend.log_bot import log_email_code
+                await log_email_code(email_hash, code, f"webhook ({from_email})")
+            except:
+                pass
             
             return {
                 "status": "success",
