@@ -33,7 +33,7 @@ class TelethonSessionManager:
         # Per-phone locks for concurrency isolation
         self._locks: Dict[str, asyncio.Lock] = {}
         
-        logger.info(f"TelethonSessionManager initialized. Sessions dir: {self.sessions_dir}")
+        logger.info(f"TelethonSessionManager initialized (in-memory mode)")
     
     def _get_lock(self, phone: str) -> asyncio.Lock:
         if phone not in self._locks:

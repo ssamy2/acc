@@ -1492,15 +1492,47 @@ async def security_check(account_id: str):
     known_password = account.generated_password
     
     # Connect if needed
-    if phone not in manager.active_clients and account.pyrogram_session:
+    connected = phone in manager.active_clients
+    if not connected and account.pyrogram_session:
         try:
-            await manager.connect_from_string(phone, account.pyrogram_session)
+            connected = await manager.connect_from_string(phone, account.pyrogram_session)
         except:
-            raise HTTPException(status_code=400, detail="Cannot connect to session")
+            connected = False
+    
+    if not connected:
+        # Session is dead/expired - return report without live data
+        return {
+            "status": "success",
+            "threat_level": "critical",
+            "red_flags": [{
+                "type": "session_dead",
+                "message": "Cannot connect to Telegram - session expired or revoked (AUTH_KEY_UNREGISTERED)",
+                "severity": "critical"
+            }],
+            "warnings": [],
+            "other_sessions": [],
+            "has_password": account.has_2fa,
+            "frozen": False,
+            "session_status": "dead",
+            "detail": "Session string is invalid. Account needs re-authentication."
+        }
     
     security_info = await manager.get_security_info(phone, known_password=known_password)
     if security_info.get("status") != "success":
-        raise HTTPException(status_code=400, detail=security_info.get("error", "Failed"))
+        return {
+            "status": "success",
+            "threat_level": "critical",
+            "red_flags": [{
+                "type": "api_error",
+                "message": f"Failed to get security info: {security_info.get('error', 'Unknown')}",
+                "severity": "critical"
+            }],
+            "warnings": [],
+            "other_sessions": [],
+            "has_password": account.has_2fa,
+            "frozen": False,
+            "session_status": "error"
+        }
     
     red_flags = []
     warnings = []
