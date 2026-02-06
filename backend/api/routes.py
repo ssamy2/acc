@@ -997,16 +997,35 @@ async def confirm_email_changed(account_id: str):
     known_password = get_cached_data(phone, "two_fa_password") or account.generated_password
     
     # Connect if needed
-    if phone not in manager.active_clients and account.pyrogram_session:
+    connected = phone in manager.active_clients
+    if not connected and account.pyrogram_session:
         try:
-            await manager.connect_from_string(phone, account.pyrogram_session)
+            connected = await manager.connect_from_string(phone, account.pyrogram_session)
         except:
-            pass
+            connected = False
+    
+    # If session is dead, we can't verify email status - return informative response
+    if not connected:
+        return {
+            "status": "session_dead",
+            "message": "Session not found or expired. Cannot verify email status.",
+            "email_changed": False,
+            "email_status": "unknown",
+            "current_display": "Session expired - cannot check",
+            "expected_email": our_email,
+            "hint": "Please re-authenticate the account first, or proceed with finalize to set the email during the process."
+        }
     
     # Get current security info to verify email change
     security_info = await manager.get_security_info(phone, known_password=known_password)
     if security_info.get("status") == "error":
-        raise HTTPException(status_code=400, detail=security_info.get("error"))
+        return {
+            "status": "error",
+            "message": security_info.get("error", "Failed to get security info"),
+            "email_changed": False,
+            "email_status": "unknown",
+            "current_display": "Error checking email status"
+        }
     
     # Extract all email fields
     recovery_email_full = security_info.get("recovery_email_full")
@@ -1106,9 +1125,15 @@ async def confirm_email_changed(account_id: str):
             "login_email_pattern": login_email_pattern,
         }
     else:
+        # Distinguish between "no recovery email" and "wrong recovery email"
+        if email_status == "none":
+            message = "No 2FA recovery email is set yet. The email will be set during finalize process."
+        else:
+            message = "Recovery email is NOT ours. Please change the 2FA recovery email (not login email) to our email."
+        
         return {
             "status": "not_changed",
-            "message": "Recovery email is NOT ours yet. Please change the 2FA recovery email (not login email) to our email.",
+            "message": message,
             "email_changed": False,
             "email_status": email_status,
             "current_display": current_display,
