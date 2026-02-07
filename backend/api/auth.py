@@ -198,6 +198,15 @@ async def _do_v2_verify(phone: str, request: VerifyAuthRequest):
             await cache_session_data(phone, telegram_id=telegram_id)
             await log_auth_action(phone, "verify_code", "success")
             
+            # Export and save session string immediately (survives server restart)
+            try:
+                session_str = await manager.export_session_string(phone)
+                if session_str:
+                    await update_account(phone, pyrogram_session=session_str)
+                    logger.info(f"[AUTH-V2] Pyrogram session saved for {phone}")
+            except Exception as e:
+                logger.warning(f"[AUTH-V2] Could not save session for {phone}: {e}")
+            
             return {
                 "status": "authenticated",
                 "message": "Successfully authenticated",
@@ -237,6 +246,15 @@ async def _do_v2_verify(phone: str, request: VerifyAuthRequest):
             
             await cache_session_data(phone, telegram_id=telegram_id, two_fa_password=request.password)
             await log_auth_action(phone, "verify_2fa", "success")
+            
+            # Export and save session string immediately (survives server restart)
+            try:
+                session_str = await manager.export_session_string(phone)
+                if session_str:
+                    await update_account(phone, pyrogram_session=session_str)
+                    logger.info(f"[AUTH-V2] Pyrogram session saved for {phone} after 2FA")
+            except Exception as e:
+                logger.warning(f"[AUTH-V2] Could not save session for {phone}: {e}")
             
             return {
                 "status": "authenticated",

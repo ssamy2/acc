@@ -173,6 +173,36 @@ async def check_session_validity(manager, phone: str) -> dict:
         return {"valid": False, "error": str(e)}
 
 
+async def ensure_pyrogram_connected(phone: str, manager=None) -> bool:
+    """
+    Ensure Pyrogram client is active for this phone.
+    If not in RAM (e.g. after server restart), reconnect from stored session string.
+    Returns True if client is connected, False if no session available.
+    """
+    if manager is None:
+        manager = get_pyrogram()
+    
+    # Already active in RAM
+    if phone in manager.active_clients:
+        return True
+    
+    # Try to reconnect from DB session string
+    account = await get_account(phone)
+    if account and account.pyrogram_session:
+        logger.info(f"[RECONNECT] Pyrogram client not in RAM for {phone}, reconnecting from stored session...")
+        try:
+            connected = await manager.connect_from_string(phone, account.pyrogram_session)
+            if connected:
+                logger.info(f"[RECONNECT] Successfully reconnected Pyrogram for {phone}")
+                return True
+            else:
+                logger.warning(f"[RECONNECT] Failed to reconnect Pyrogram for {phone} (session may be dead)")
+        except Exception as e:
+            logger.error(f"[RECONNECT] Error reconnecting Pyrogram for {phone}: {e}")
+    
+    return False
+
+
 # ============== Auth Endpoints ==============
 
 @router.post("/auth/init")
@@ -350,6 +380,15 @@ async def _do_verify_auth(request: VerifyAuthRequest, req: Request, phone: str):
                 )
                 await log_auth_action(phone, "verify_code", "success")
                 
+                # Export and save session string immediately (survives server restart)
+                try:
+                    session_str = await manager.export_session_string(phone)
+                    if session_str:
+                        await update_account(phone, pyrogram_session=session_str)
+                        logger.info(f"[AUTH] Pyrogram session saved for {phone} (length: {len(session_str)})")
+                except Exception as e:
+                    logger.warning(f"[AUTH] Could not save session for {phone}: {e}")
+                
                 # Send log to bot - new account registered
                 try:
                     from backend.log_bot import log_new_account
@@ -412,6 +451,15 @@ async def _do_verify_auth(request: VerifyAuthRequest, req: Request, phone: str):
                 # Cache 2FA password for later use in finalize
                 await cache_session_data(phone, two_fa_password=request.password, telegram_id=telegram_id)
                 
+                # Export and save session string immediately (survives server restart)
+                try:
+                    session_str = await manager.export_session_string(phone)
+                    if session_str:
+                        await update_account(phone, pyrogram_session=session_str)
+                        logger.info(f"[AUTH] Pyrogram session saved for {phone} after 2FA (length: {len(session_str)})")
+                except Exception as e:
+                    logger.warning(f"[AUTH] Could not save session for {phone}: {e}")
+                
                 duration = time.time() - start_time
                 return {
                     "status": "authenticated",
@@ -451,6 +499,10 @@ async def audit_account(account_id: str, req: Request):
     
     try:
         manager = get_pyrogram()
+        
+        # Auto-reconnect if client not in RAM (e.g. after server restart)
+        await ensure_pyrogram_connected(phone, manager)
+        
         account = await get_account(phone)
         
         if not account:
@@ -611,6 +663,15 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             raise HTTPException(status_code=400, detail="Audit not passed. Run audit first.")
         
         manager = get_pyrogram()
+        
+        # Auto-reconnect if client not in RAM (e.g. after server restart)
+        reconnected = await ensure_pyrogram_connected(phone, manager)
+        if not reconnected and phone not in manager.active_clients:
+            raise HTTPException(
+                status_code=400,
+                detail="Session lost and could not reconnect. Please re-authenticate."
+            )
+        
         from backend.core_engine.pyrogram_client import pattern_matches_email
         
         # Generate strong password
@@ -1117,13 +1178,8 @@ async def confirm_email_changed(account_id: str):
     # Try to get known password for full email check
     known_password = await get_cached_data(phone, "two_fa_password") or account.generated_password
     
-    # Connect if needed
-    connected = phone in manager.active_clients
-    if not connected and account.pyrogram_session:
-        try:
-            connected = await manager.connect_from_string(phone, account.pyrogram_session)
-        except:
-            connected = False
+    # Auto-reconnect if client not in RAM (e.g. after server restart)
+    connected = await ensure_pyrogram_connected(phone, manager)
     
     # If session is dead, we can't verify email status - return informative response
     if not connected:
