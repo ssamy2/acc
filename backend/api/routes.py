@@ -588,71 +588,89 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             security_info = await manager.get_security_info(phone, known_password=current_2fa_password)
             has_password = security_info.get("has_password", False)
             
-            # Step 2: Enable or change 2FA password to OUR generated one
+            # Step 2: Enable or change 2FA password
+            email_needs_confirmation = False
+            confirmation_success = False  # Initialize here to avoid undefined variable
+            email_is_ours = False
+            recovery_email_full = None
+            email_unconfirmed = None
+            
             if has_password and current_2fa_password:
-                # 2FA already enabled - change password to ours
-                logger.info(f"[FINALIZE] Changing 2FA password for {phone}")
+                # === 2FA ALREADY ENABLED ===
+                # Change password to ours
+                logger.info(f"[FINALIZE] 2FA already enabled - changing password for {phone}")
                 result = await manager.change_2fa_password(
                     phone=phone,
                     current_password=current_2fa_password,
                     new_password=new_password
                 )
-            else:
-                # 2FA disabled - enable it with our password
-                logger.info(f"[FINALIZE] Enabling 2FA for {phone}")
-                result = await manager.enable_2fa(phone, new_password, hint="", email="")
-            
-            if result.get("status") != "success":
-                raise HTTPException(status_code=400, detail=f"Failed to set 2FA: {result.get('error')}")
-            
-            logger.info(f"[FINALIZE] 2FA password set successfully for {phone}")
-            
-            # Step 3: Re-check recovery email status using OUR new password
-            logger.info(f"[FINALIZE] Checking recovery email status for {phone}")
-            security_info2 = await manager.get_security_info(phone, known_password=new_password)
-            recovery_email_full = security_info2.get("recovery_email_full")
-            email_unconfirmed = security_info2.get("email_unconfirmed_pattern")
-            
-            email_is_ours = False
-            if recovery_email_full and EMAIL_DOMAIN in recovery_email_full.lower():
-                email_is_ours = True
-                logger.info(f"[FINALIZE] Recovery email already ours: {recovery_email_full}")
-            elif email_unconfirmed and EMAIL_DOMAIN in str(email_unconfirmed).lower():
-                email_is_ours = True
-                logger.info(f"[FINALIZE] Recovery email pending (ours): {email_unconfirmed}")
-            elif email_unconfirmed and target_email and pattern_matches_email(email_unconfirmed, target_email):
-                email_is_ours = True
-                logger.info(f"[FINALIZE] Recovery email pending by pattern match: {email_unconfirmed}")
-            
-            email_needs_confirmation = False
-            confirmation_success = False  # Initialize here to avoid undefined variable
-            
-            # Step 4: If email not ours yet, explicitly set it
-            if not email_is_ours and target_email:
-                logger.info(f"[FINALIZE] Setting recovery email to {target_email} for {phone}")
-                email_result = await manager.change_recovery_email(phone, new_password, target_email)
                 
-                if email_result.get("status") != "success":
-                    logger.error(f"[FINALIZE] Failed to change recovery email: {email_result.get('error')}")
-                    raise HTTPException(
-                        status_code=400, 
-                        detail={
-                            "error": "EMAIL_CHANGE_FAILED",
-                            "message": "Could not set recovery email. Please set it manually in Telegram.",
-                            "target_email": target_email,
-                            "technical_error": email_result.get("error")
-                        }
-                    )
+                if result.get("status") != "success":
+                    raise HTTPException(status_code=400, detail=f"Failed to change 2FA password: {result.get('error')}")
                 
-                logger.info(f"[FINALIZE] Recovery email change initiated for {phone}")
-                email_needs_confirmation = True
-            elif not target_email:
-                logger.warning(f"[FINALIZE] No target email configured for {phone}")
-            else:
-                logger.info(f"[FINALIZE] Recovery email already correct for {phone}")
-                # Check if it needs confirmation even if it's ours
-                if email_unconfirmed and not recovery_email_full:
+                logger.info(f"[FINALIZE] 2FA password changed for {phone}")
+                
+                # Step 3a: Check current recovery email status
+                logger.info(f"[FINALIZE] Checking recovery email status for {phone}")
+                security_info2 = await manager.get_security_info(phone, known_password=new_password)
+                recovery_email_full = security_info2.get("recovery_email_full")
+                email_unconfirmed = security_info2.get("email_unconfirmed_pattern")
+                
+                if recovery_email_full and EMAIL_DOMAIN in recovery_email_full.lower():
+                    email_is_ours = True
+                    logger.info(f"[FINALIZE] Recovery email already ours (confirmed): {recovery_email_full}")
+                elif email_unconfirmed and EMAIL_DOMAIN in str(email_unconfirmed).lower():
+                    email_is_ours = True
                     email_needs_confirmation = True
+                    logger.info(f"[FINALIZE] Recovery email ours but pending confirmation: {email_unconfirmed}")
+                elif email_unconfirmed and target_email and pattern_matches_email(email_unconfirmed, target_email):
+                    email_is_ours = True
+                    email_needs_confirmation = True
+                    logger.info(f"[FINALIZE] Recovery email ours by pattern match, pending: {email_unconfirmed}")
+                
+                # Step 3b: If recovery email not ours, change it separately
+                if not email_is_ours and target_email:
+                    logger.info(f"[FINALIZE] Setting recovery email to {target_email} for {phone}")
+                    email_result = await manager.change_recovery_email(phone, new_password, target_email)
+                    
+                    if email_result.get("status") != "success":
+                        logger.error(f"[FINALIZE] Failed to change recovery email: {email_result.get('error')}")
+                        raise HTTPException(
+                            status_code=400, 
+                            detail={
+                                "error": "EMAIL_CHANGE_FAILED",
+                                "message": "Could not set recovery email. Please set it manually in Telegram.",
+                                "target_email": target_email,
+                                "technical_error": email_result.get("error")
+                            }
+                        )
+                    
+                    logger.info(f"[FINALIZE] Recovery email change initiated for {phone}")
+                    email_needs_confirmation = True
+                elif not target_email:
+                    logger.warning(f"[FINALIZE] No target email configured for {phone}")
+                
+            else:
+                # === 2FA NOT ENABLED ===
+                # Per Telegram official docs: enable 2FA + set recovery email in ONE call
+                # account.updatePasswordSettings with email param → EMAIL_UNCONFIRMED_X
+                # Then confirm with account.confirmPasswordEmail
+                logger.info(f"[FINALIZE] 2FA not enabled - enabling with password + recovery email for {phone}")
+                result = await manager.enable_2fa(
+                    phone, new_password, hint="",
+                    email=target_email or ""
+                )
+                
+                if result.get("status") != "success":
+                    raise HTTPException(status_code=400, detail=f"Failed to enable 2FA: {result.get('error')}")
+                
+                logger.info(f"[FINALIZE] 2FA enabled for {phone}")
+                
+                # If we passed a target email, it's now set but needs confirmation
+                if target_email:
+                    email_needs_confirmation = True
+                    email_is_ours = True
+                    logger.info(f"[FINALIZE] Recovery email {target_email} set during 2FA enable, needs confirmation")
             
             # Step 5: Wait for and confirm email verification code
             if email_needs_confirmation and target_email and email_hash:
@@ -1092,6 +1110,19 @@ async def confirm_email_changed(account_id: str):
     has_recovery = security_info.get("has_recovery_email", False)
     has_password = security_info.get("has_password", False)
     
+    # If 2FA is not enabled, recovery email doesn't exist - no point checking
+    if not has_password:
+        return {
+            "status": "2fa_not_enabled",
+            "message": "Two-step verification is not enabled. Recovery email only exists when 2FA is active. The email will be set automatically during the finalize step.",
+            "email_changed": False,
+            "email_status": "not_applicable",
+            "current_display": "2FA not enabled - no recovery email",
+            "expected_email": our_email,
+            "has_2fa": False,
+            "hint": "Skip this step and proceed to finalize. 2FA + recovery email will be set together."
+        }
+    
     email_matches = False
     email_status = "unknown"
     current_display = ""
@@ -1149,8 +1180,8 @@ async def confirm_email_changed(account_id: str):
         email_status = "none"
         current_display = "No recovery email set"
     
-    # Disconnect to free RAM
-    await manager.disconnect(phone)
+    # Keep session alive - do NOT disconnect here
+    # Other endpoints need the active session (e.g. finalize, security_check)
     
     if email_matches:
         await update_account(

