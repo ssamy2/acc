@@ -164,8 +164,18 @@ class SecurityAuditService:
         
         else:
             # No recovery email at all - we'll set one during finalize
-            log_audit(logger, phone, "Recovery Email (2FA)", True, "No recovery email - will set ours during finalize")
+            issue = {
+                "type": "RECOVERY_EMAIL_NOT_SET",
+                "severity": "info",
+                "title": "No recovery email set",
+                "description": "Recovery email will be configured automatically during finalize",
+                "action": f"Will auto-set to: {actions_needed.get('our_email', 'N/A')}",
+                "target_email": actions_needed.get("our_email"),
+                "auto_fixable": True
+            }
+            issues.append(issue)
             actions_needed["change_email"] = True
+            log_audit(logger, phone, "Recovery Email (2FA)", True, "No recovery email - will set ours during finalize")
         
         # ========== Login Email Check (separate from recovery!) ==========
         # login_email_pattern is for "Sign in with email" feature

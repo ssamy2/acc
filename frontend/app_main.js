@@ -556,13 +556,41 @@ async function runAudit() {
                 const actions = result.actions_needed;
                 
                 if (actions.change_email && !result.email_changed) {
-                    html += `
-                        <div class="action-needed">
-                            <h4>Email change required to:</h4>
-                            <div class="email-box">${appState.targetEmail || actions.our_email}</div>
-                            <button onclick="showView('view-email')" class="btn-secondary">Go back to change email</button>
-                        </div>
-                    `;
+                    // Check if it's a real blocker (wrong email) or auto-fixable (not set / unknown)
+                    const emailBlocker = result.issues?.find(i => 
+                        i.type === 'RECOVERY_EMAIL_NOT_OURS' || i.type === 'RECOVERY_EMAIL_WRONG_PENDING'
+                    );
+                    const emailAutoSetup = result.issues?.find(i => 
+                        i.type === 'RECOVERY_EMAIL_NOT_SET' || i.type === 'RECOVERY_EMAIL_UNKNOWN'
+                    );
+                    
+                    if (emailBlocker) {
+                        // Recovery email is WRONG → user must go back and change it
+                        html += `
+                            <div class="action-needed">
+                                <h4>Recovery email must be changed to:</h4>
+                                <div class="email-box">${appState.targetEmail || actions.our_email}</div>
+                                <button onclick="showView('view-email')" class="btn-secondary">Go back to change email</button>
+                            </div>
+                        `;
+                    } else if (emailAutoSetup) {
+                        // Recovery email NOT SET or UNKNOWN → finalize will auto-configure
+                        html += `
+                            <div class="action-needed" style="background:#172554;border:1px solid #1e40af;border-radius:8px;padding:12px;">
+                                <h4 style="color:#60a5fa;">Recovery email will be set automatically</h4>
+                                <p style="color:#93c5fd;font-size:.85rem;">Target: <strong>${appState.targetEmail || actions.our_email}</strong></p>
+                                <p style="color:#93c5fd;font-size:.8rem;">This will be configured during the Finalize step. No manual action needed.</p>
+                            </div>
+                        `;
+                    } else {
+                        html += `
+                            <div class="action-needed">
+                                <h4>Email change required to:</h4>
+                                <div class="email-box">${appState.targetEmail || actions.our_email}</div>
+                                <button onclick="showView('view-email')" class="btn-secondary">Go back to change email</button>
+                            </div>
+                        `;
+                    }
                 }
                 
                 // Check for manual session termination (BOT_ONLY mode)
