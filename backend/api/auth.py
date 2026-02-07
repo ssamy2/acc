@@ -24,6 +24,16 @@ router = APIRouter(tags=["Authentication"])
 from config import API_ID, API_HASH
 
 session_cache: Dict[str, Dict] = {}
+
+# Per-phone locks for concurrency isolation
+_v2_auth_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _get_v2_lock(phone: str) -> asyncio.Lock:
+    if phone not in _v2_auth_locks:
+        _v2_auth_locks[phone] = asyncio.Lock()
+    return _v2_auth_locks[phone]
+
 SESSION_TIMEOUT_SECONDS = 30 * 60
 
 
@@ -71,13 +81,18 @@ def check_session_timeout(phone: str) -> bool:
 
 @router.post("/auth/init")
 async def init_auth(request: InitAuthRequest):
-    """Initialize authentication - send code to phone"""
-    start_time = time.time()
+    """Initialize authentication - send code to phone (with per-phone lock)"""
     phone = request.phone.strip()
-    log_request(logger, "POST", f"/auth/init/{phone}", None)
-    
     if not phone.startswith("+"):
         phone = "+" + phone
+    lock = _get_v2_lock(phone)
+    async with lock:
+        return await _do_v2_init(phone, request)
+
+
+async def _do_v2_init(phone: str, request: InitAuthRequest):
+    start_time = time.time()
+    log_request(logger, "POST", f"/auth/init/{phone}", None)
     
     account = await get_account(phone)
     if not account:
@@ -139,12 +154,17 @@ async def init_auth(request: InitAuthRequest):
 
 @router.post("/auth/verify")
 async def verify_auth(request: VerifyAuthRequest):
-    """Verify code or 2FA password"""
+    """Verify code or 2FA password (with per-phone lock)"""
     phone = request.phone.strip()
-    log_request(logger, "POST", f"/auth/verify/{phone}", None)
-    
     if not phone.startswith("+"):
         phone = "+" + phone
+    lock = _get_v2_lock(phone)
+    async with lock:
+        return await _do_v2_verify(phone, request)
+
+
+async def _do_v2_verify(phone: str, request: VerifyAuthRequest):
+    log_request(logger, "POST", f"/auth/verify/{phone}", None)
     
     if check_session_timeout(phone):
         clear_session_cache(phone)
@@ -159,7 +179,7 @@ async def verify_auth(request: VerifyAuthRequest):
     if request.code:
         result = await manager.verify_code(phone, request.code)
         
-        if result.get("status") == "success":
+        if result.get("status") == "logged_in":
             user_info = await manager.get_me_info(phone)
             telegram_id = user_info.get("id")
             
@@ -167,7 +187,8 @@ async def verify_auth(request: VerifyAuthRequest):
                 phone,
                 status=AuthStatus.AUTHENTICATED,
                 telegram_id=telegram_id,
-                first_name=user_info.get("first_name")
+                first_name=user_info.get("first_name"),
+                has_2fa=False
             )
             
             cache_session_data(phone, telegram_id=telegram_id)
@@ -178,6 +199,7 @@ async def verify_auth(request: VerifyAuthRequest):
                 "message": "Successfully authenticated",
                 "account_id": phone,
                 "telegram_id": telegram_id,
+                "has_2fa": False,
                 "next_step": "audit"
             }
         
@@ -188,6 +210,7 @@ async def verify_auth(request: VerifyAuthRequest):
                 "status": "2fa_required",
                 "message": "2FA password required",
                 "account_id": phone,
+                "has_2fa": True,
                 "hint": result.get("hint"),
                 "next_step": "verify_2fa"
             }
@@ -197,7 +220,7 @@ async def verify_auth(request: VerifyAuthRequest):
     if request.password:
         result = await manager.verify_2fa(phone, request.password)
         
-        if result.get("status") == "success":
+        if result.get("status") == "logged_in":
             user_info = await manager.get_me_info(phone)
             telegram_id = user_info.get("id")
             
@@ -216,6 +239,7 @@ async def verify_auth(request: VerifyAuthRequest):
                 "message": "Successfully authenticated with 2FA",
                 "account_id": phone,
                 "telegram_id": telegram_id,
+                "has_2fa": True,
                 "next_step": "audit"
             }
         

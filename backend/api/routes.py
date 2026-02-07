@@ -131,6 +131,19 @@ def get_session_remaining_time(phone: str) -> int:
     return max(0, int(remaining))
 
 
+# ============== Concurrency Locks ==============
+
+# Per-phone locks to prevent overlapping auth/finalize for the same number
+_auth_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _get_auth_lock(phone: str) -> asyncio.Lock:
+    """Get or create an asyncio.Lock for a phone number (concurrency isolation)."""
+    if phone not in _auth_locks:
+        _auth_locks[phone] = asyncio.Lock()
+    return _auth_locks[phone]
+
+
 # ============== Helper Functions ==============
 
 def get_pyrogram():
@@ -144,6 +157,13 @@ def get_telethon():
 def generate_strong_password(length: int = 20) -> str:
     alphabet = string.ascii_letters + string.digits + "!@#$%^&*()_+-="
     return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+
+def validate_email_domain(email: str) -> bool:
+    """Strict check: email MUST end with @channelsseller.site"""
+    if not email:
+        return False
+    return email.strip().lower().endswith(f"@{EMAIL_DOMAIN}")
 
 
 async def check_session_validity(manager, phone: str) -> dict:
@@ -160,10 +180,19 @@ async def check_session_validity(manager, phone: str) -> dict:
 @router.post("/auth/init")
 async def init_auth(request: InitAuthRequest, req: Request):
     """
-    Initialize authentication - Send verification code
+    Initialize authentication - Send verification code.
+    Uses per-phone lock to prevent overlapping sessions for the same number.
+    Supports 10+ simultaneous logins for different numbers (no shared state).
     """
-    start_time = time.time()
     phone = request.phone
+    # Per-phone lock: isolates concurrent requests for the SAME phone
+    auth_lock = _get_auth_lock(phone)
+    async with auth_lock:
+        return await _do_init_auth(request, req, phone)
+
+
+async def _do_init_auth(request: InitAuthRequest, req: Request, phone: str):
+    start_time = time.time()
     log_request(logger, "POST", "/auth/init", {"phone": phone})
     
     try:
@@ -274,10 +303,18 @@ async def init_auth(request: InitAuthRequest, req: Request):
 @router.post("/auth/verify")
 async def verify_auth(request: VerifyAuthRequest, req: Request):
     """
-    Verify authentication - Code or 2FA password
+    Verify authentication - Code or 2FA password.
+    Uses per-phone lock for concurrency isolation.
+    Returns has_2fa so frontend knows whether to show email step or skip it.
     """
-    start_time = time.time()
     phone = request.phone
+    auth_lock = _get_auth_lock(phone)
+    async with auth_lock:
+        return await _do_verify_auth(request, req, phone)
+
+
+async def _do_verify_auth(request: VerifyAuthRequest, req: Request, phone: str):
+    start_time = time.time()
     log_request(logger, "POST", "/auth/verify", {"phone": phone})
     
     try:
@@ -299,12 +336,19 @@ async def verify_auth(request: VerifyAuthRequest, req: Request):
                 # Generate email info
                 email_info = get_full_email_info(telegram_id, phone) if telegram_id else {}
                 
+                # Validate generated email domain
+                gen_email = email_info.get("email", "")
+                if gen_email and not validate_email_domain(gen_email):
+                    logger.error(f"Generated email domain mismatch: {gen_email}")
+                    raise HTTPException(status_code=500, detail=f"Internal email generation error: domain must be @{EMAIL_DOMAIN}")
+                
                 await update_account(
                     phone,
                     status=AuthStatus.AUTHENTICATED,
                     telegram_id=telegram_id,
                     email_hash=email_info.get("hash"),
-                    target_email=email_info.get("email")
+                    target_email=email_info.get("email"),
+                    has_2fa=False
                 )
                 await log_auth_action(phone, "verify_code", "success")
                 
@@ -322,6 +366,7 @@ async def verify_auth(request: VerifyAuthRequest, req: Request):
                     "telegram_id": telegram_id,
                     "target_email": email_info.get("email"),
                     "email_hash": email_info.get("hash"),
+                    "has_2fa": False,
                     "duration": duration
                 }
             
@@ -332,6 +377,7 @@ async def verify_auth(request: VerifyAuthRequest, req: Request):
                 return {
                     "status": "2fa_required",
                     "message": "2FA password required",
+                    "has_2fa": True,
                     "hint": result.get("hint", "")
                 }
             else:
@@ -375,6 +421,7 @@ async def verify_auth(request: VerifyAuthRequest, req: Request):
                     "telegram_id": telegram_id,
                     "target_email": email_info.get("email"),
                     "email_hash": email_info.get("hash"),
+                    "has_2fa": True,
                     "two_fa_cached": True,
                     "duration": duration
                 }

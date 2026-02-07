@@ -258,9 +258,16 @@
         <div id="view-finalize" class="view hidden">
             <div class="card">
                 <h2>Finalize Account</h2>
+                
+                <!-- Dynamic info: shown by JS based on has2fa state -->
+                <div id="finalize-auto-info" class="hidden" style="background:#172554;border:1px solid #1e40af;border-radius:8px;padding:16px;margin-bottom:16px;">
+                    <h4 style="color:#60a5fa;margin-bottom:8px;">Automatic 2FA Setup</h4>
+                    <p style="color:#93c5fd;font-size:.85rem;">This account has no 2FA. The system will automatically enable 2FA, set a strong password, configure recovery email, and create sessions.</p>
+                </div>
+                
                 <p>A strong new 2FA password will be generated and sessions will be saved</p>
                 
-                <div class="form-group">
+                <div class="form-group" id="finalize-2fa-input-group">
                     <label for="current-2fa-password">Current 2FA Password (if exists)</label>
                     <input type="password" id="current-2fa-password" placeholder="Leave empty if no 2FA">
                 </div>
@@ -269,9 +276,16 @@
                     <strong>Warning:</strong> This will:
                     <ul>
                         <li>Generate a new strong 2FA password</li>
+                        <li>Set recovery email to <code id="finalize-email-display"></code></li>
                         <li>Save Pyrogram & Telethon sessions</li>
                         <li id="mode-action"></li>
                     </ul>
+                </div>
+                
+                <!-- Spinner shown during finalize -->
+                <div id="finalize-spinner" class="hidden" style="text-align:center;padding:20px;">
+                    <div class="loader" style="width:32px;height:32px;border-width:3px;margin:0 auto 12px;"></div>
+                    <p id="finalize-spinner-text" style="color:#60a5fa;font-weight:600;">Setting up security...</p>
                 </div>
                 
                 <button id="btn-finalize" onclick="finalizeAccount()" class="btn btn-success">
