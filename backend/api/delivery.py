@@ -35,7 +35,10 @@ def get_telethon():
 
 @router.post("/delivery/request-code/{account_id}")
 async def request_delivery_code(account_id: str):
-    """Request login code for delivery to buyer"""
+    """
+    Step 2: Buyer has requested a login code from Telegram app.
+    Connect Pyrogram (to read code from 777000 later). Do NOT send any code.
+    """
     phone = account_id
     account = await get_account(phone)
     
@@ -54,41 +57,78 @@ async def request_delivery_code(account_id: str):
         connected = await manager.connect_from_string(phone, account.pyrogram_session)
         if not connected:
             raise HTTPException(status_code=400, detail="Failed to connect session - session may be expired")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to connect for delivery: {e}")
         raise HTTPException(status_code=400, detail=f"Session connection failed: {str(e)}")
     
-    # Send login code to buyer
-    try:
-        code_result = await manager.send_code(phone)
-        if code_result.get("status") not in ["code_sent", "already_logged_in"]:
-            raise HTTPException(status_code=400, detail="Failed to send code")
-    except Exception as e:
-        logger.error(f"Failed to send code: {e}")
-        raise HTTPException(status_code=400, detail="Failed to send code")
-    
     await update_account(
         phone,
-        delivery_status=DeliveryStatus.CODE_SENT,
+        delivery_status=DeliveryStatus.WAITING_CODE,
         code_sent_at=datetime.utcnow(),
-        confirmation_deadline=datetime.utcnow() + timedelta(minutes=5)
+        confirmation_deadline=datetime.utcnow() + timedelta(minutes=30)
     )
     
-    await log_auth_action(phone, "delivery_request", "success")
+    await log_auth_action(phone, "delivery_waiting_code", "pending")
     
     return {
         "status": "success",
-        "message": "Login code sent to buyer",
+        "message": "Ready to read code. Buyer should request login code from Telegram app.",
         "account_id": phone,
-        "has_2fa_password": bool(account.generated_password),
-        "has_2fa": account.has_2fa,
-        "deadline_minutes": 5
+        "delivery_status": "WAITING_CODE"
+    }
+
+
+@router.get("/delivery/get-code/{account_id}")
+async def delivery_get_code(account_id: str):
+    """
+    Step 3: Read login code from Telegram messages (777000).
+    Returns code + 2FA password. Disconnects Pyrogram after reading.
+    """
+    phone = account_id
+    account = await get_account(phone)
+    
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    manager = get_pyrogram()
+    
+    if phone not in manager.active_clients:
+        if account.pyrogram_session:
+            try:
+                await manager.connect_from_string(phone, account.pyrogram_session)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Reconnect failed: {e}")
+        else:
+            raise HTTPException(status_code=400, detail="No session available")
+    
+    code = await manager.get_last_telegram_code(phone, max_age_seconds=300)
+    
+    if not code:
+        return {"status": "waiting", "message": "No code received yet."}
+    
+    await update_account(phone, delivery_status=DeliveryStatus.CODE_SENT, last_code=code)
+    await log_auth_action(phone, "delivery_code_read", "success", f"Code: {code[:2]}***")
+    
+    # Disconnect Pyrogram after reading (free RAM)
+    await manager.disconnect(phone)
+    
+    return {
+        "status": "success",
+        "code": code,
+        "has_password": bool(account.generated_password),
+        "password": account.generated_password,
+        "timeout_minutes": 30
     }
 
 
 @router.post("/delivery/confirm/{account_id}")
 async def confirm_delivery(account_id: str, request: DeliveryConfirmRequest):
-    """Confirm delivery received by buyer"""
+    """
+    Step 4: Confirm delivery. Sequential connection management.
+    Pyrogram connect → logout → disconnect, then Telethon connect → logout → disconnect.
+    """
     phone = account_id
     account = await get_account(phone)
     
@@ -100,35 +140,43 @@ async def confirm_delivery(account_id: str, request: DeliveryConfirmRequest):
     
     manager = get_pyrogram()
     telethon_mgr = get_telethon()
+    logout_results = []
     
-    # CRITICAL: Log out sessions BEFORE clearing from DB
+    # Pyrogram logout (sequential)
     try:
         if account.pyrogram_session:
             connected = await manager.connect_from_string(phone, account.pyrogram_session)
             if connected:
-                await manager.log_out(phone)
-                logger.info(f"Pyrogram logged out for delivery: {phone}")
+                logged_out = await manager.log_out(phone)
+                logout_results.append(f"Pyrogram: {'OK' if logged_out else 'failed'}")
             else:
-                await manager.disconnect(phone)
-        else:
-            await manager.disconnect(phone)
+                logout_results.append("Pyrogram: connect failed")
+        await manager.disconnect(phone)
     except Exception as e:
         logger.warning(f"Pyrogram logout failed: {e}")
-        try: await manager.disconnect(phone)
-        except: pass
+        logout_results.append(f"Pyrogram: error")
+        try:
+            await manager.disconnect(phone)
+        except:
+            pass
     
+    # Telethon logout (sequential - after Pyrogram is disconnected)
     try:
         if account.telethon_session:
             connected = await telethon_mgr.connect_from_string(phone, account.telethon_session)
             if connected:
-                await telethon_mgr.log_out(phone)
-                logger.info(f"Telethon logged out for delivery: {phone}")
+                logged_out = await telethon_mgr.log_out(phone)
+                logout_results.append(f"Telethon: {'OK' if logged_out else 'failed'}")
             else:
-                await telethon_mgr.disconnect(phone)
+                logout_results.append("Telethon: connect failed")
+        await telethon_mgr.disconnect(phone)
     except Exception as e:
         logger.warning(f"Telethon logout failed: {e}")
-        try: await telethon_mgr.disconnect(phone)
-        except: pass
+        logout_results.append(f"Telethon: error")
+        try:
+            await telethon_mgr.disconnect(phone)
+        except:
+            pass
     
     new_count = (account.delivery_count or 0) + 1
     
@@ -138,14 +186,16 @@ async def confirm_delivery(account_id: str, request: DeliveryConfirmRequest):
         delivered_at=datetime.utcnow(),
         delivery_count=new_count,
         pyrogram_session=None,
-        telethon_session=None
+        telethon_session=None,
+        last_code=None,
+        generated_password=None
     )
     
     log_credentials(
         phone=phone,
         action="DELIVERY_CONFIRMED",
         telegram_id=account.telegram_id,
-        extra_data={"delivery_number": new_count}
+        extra_data={"delivery_number": new_count, "logout_results": logout_results}
     )
     
     await log_auth_action(phone, "delivery_confirm", "success", f"Delivery #{new_count}")
@@ -154,5 +204,6 @@ async def confirm_delivery(account_id: str, request: DeliveryConfirmRequest):
         "status": "success",
         "message": f"Delivery #{new_count} confirmed",
         "account_id": phone,
-        "delivery_number": new_count
+        "delivery_number": new_count,
+        "logout_results": logout_results
     }

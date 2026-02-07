@@ -821,7 +821,7 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
                 pass
             
             # ============================================================
-            # STEP 5: Export Pyrogram session
+            # STEP 5: Export Pyrogram session + DISCONNECT
             # ============================================================
             logger.info(f"[FINALIZE] Step 5: Exporting Pyrogram session for {phone}")
             pyrogram_session = await manager.export_session_string(phone)
@@ -832,64 +832,90 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             # Save Pyrogram session immediately
             await update_account(phone, pyrogram_session=pyrogram_session)
             
+            # DISCONNECT Pyrogram - free RAM, prevent simultaneous connections
+            await manager.disconnect(phone)
+            logger.info(f"[FINALIZE] Step 5: Pyrogram disconnected for {phone}")
+            
             # ============================================================
-            # STEP 6: Telethon session
-            # Send new code → get code from Telegram 777000 → verify → 2FA
+            # STEP 6: Telethon session (sequential connection)
+            # 6a: Telethon sends code
+            # 6b: Reconnect Pyrogram briefly to read code, then disconnect
+            # 6c: Verify code with Telethon, export session, disconnect
             # ============================================================
             logger.info(f"[FINALIZE] Step 6: Creating Telethon session for {phone}")
             telethon_manager = get_telethon()
             telethon_session_string = None
             
             try:
-                # Small delay to let Telegram settle after email operations
                 await asyncio.sleep(2)
                 
-                # Send code via Telethon
+                # 6a: Telethon sends code
                 telethon_result = await telethon_manager.send_code(phone)
                 
                 if telethon_result.get("status") == "already_logged_in":
                     telethon_session_string = await telethon_manager.export_session_string(phone)
+                    # Disconnect Telethon after export
+                    await telethon_manager.disconnect(phone)
                     logger.info(f"[FINALIZE] Step 6: Telethon already logged in for {phone}")
                 
                 elif telethon_result.get("status") == "code_sent":
-                    # Wait for new code to arrive in Telegram messages (777000)
-                    logger.info(f"[FINALIZE] Step 6: Telethon code sent, waiting for code from Telegram 777000...")
+                    logger.info(f"[FINALIZE] Step 6a: Telethon code sent, waiting for arrival...")
                     await asyncio.sleep(4)
                     
-                    # Get code from Telegram messages ONLY (NOT from email webhook)
+                    # 6b: Reconnect Pyrogram briefly to read code from 777000
                     code = None
-                    for attempt in range(8):
-                        code = await manager.get_last_telegram_code(phone, max_age_seconds=30)
-                        if code:
-                            logger.info(f"[FINALIZE] Step 6: Got Telethon code from Telegram: {code}")
-                            break
-                        await asyncio.sleep(2)
+                    try:
+                        reconnected = await manager.connect_from_string(phone, pyrogram_session)
+                        if reconnected:
+                            for attempt in range(8):
+                                code = await manager.get_last_telegram_code(phone, max_age_seconds=30)
+                                if code:
+                                    logger.info(f"[FINALIZE] Step 6b: Got code from Telegram 777000: {code}")
+                                    break
+                                await asyncio.sleep(2)
+                        # Disconnect Pyrogram immediately after reading
+                        await manager.disconnect(phone)
+                        logger.info(f"[FINALIZE] Step 6b: Pyrogram disconnected after reading code")
+                    except Exception as e:
+                        logger.error(f"[FINALIZE] Step 6b: Error reading code via Pyrogram: {e}")
+                        try:
+                            await manager.disconnect(phone)
+                        except:
+                            pass
                     
                     if not code:
-                        logger.error(f"[FINALIZE] Step 6: Could not get Telegram code for Telethon: {phone}")
+                        logger.error(f"[FINALIZE] Step 6b: Could not get Telegram code for Telethon: {phone}")
                     else:
-                        # Verify code
+                        # 6c: Verify code with Telethon
                         verify_result = await telethon_manager.verify_code(phone, code)
                         
                         if verify_result.get("status") == "2fa_required":
-                            # Use the new password we just set
-                            logger.info(f"[FINALIZE] Step 6: Telethon 2FA required, using new password")
+                            logger.info(f"[FINALIZE] Step 6c: Telethon 2FA required, using new password")
                             tfa_result = await telethon_manager.verify_2fa(phone, new_password)
                             if tfa_result.get("status") == "logged_in":
                                 telethon_session_string = await telethon_manager.export_session_string(phone)
-                                logger.info(f"[FINALIZE] Step 6: Telethon session created with 2FA for {phone}")
+                                logger.info(f"[FINALIZE] Step 6c: Telethon session created with 2FA for {phone}")
                             else:
-                                logger.error(f"[FINALIZE] Step 6: Telethon 2FA failed: {tfa_result}")
+                                logger.error(f"[FINALIZE] Step 6c: Telethon 2FA failed: {tfa_result}")
                         elif verify_result.get("status") == "logged_in":
                             telethon_session_string = await telethon_manager.export_session_string(phone)
-                            logger.info(f"[FINALIZE] Step 6: Telethon session created for {phone}")
+                            logger.info(f"[FINALIZE] Step 6c: Telethon session created for {phone}")
                         else:
-                            logger.error(f"[FINALIZE] Step 6: Telethon verify failed: {verify_result}")
+                            logger.error(f"[FINALIZE] Step 6c: Telethon verify failed: {verify_result}")
+                    
+                    # Disconnect Telethon after session export
+                    await telethon_manager.disconnect(phone)
+                    logger.info(f"[FINALIZE] Step 6c: Telethon disconnected for {phone}")
                 else:
                     logger.error(f"[FINALIZE] Step 6: Telethon send_code failed: {telethon_result}")
+                    await telethon_manager.disconnect(phone)
             
             except Exception as e:
                 logger.error(f"[FINALIZE] Step 6: Telethon error: {e}")
+                try:
+                    await telethon_manager.disconnect(phone)
+                except:
+                    pass
             
             # CRITICAL: Telethon session must be created
             if not telethon_session_string:
@@ -903,6 +929,7 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             
             # ============================================================
             # STEP 7: Terminate other sessions + save everything
+            # Reconnect Pyrogram briefly for terminate, then disconnect
             # ============================================================
             logger.info(f"[FINALIZE] Step 7: Finalizing and saving for {phone}")
             
@@ -912,11 +939,22 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             except:
                 pass
             
-            # Terminate other sessions if bot_only mode
+            # Terminate other (non-bot) sessions if bot_only mode
             terminated_count = 0
             if account.transfer_mode == DBTransferMode.BOT_ONLY:
-                term_result = await manager.terminate_other_sessions(phone)
-                terminated_count = term_result.get("terminated_count", 0)
+                try:
+                    reconnected = await manager.connect_from_string(phone, pyrogram_session)
+                    if reconnected:
+                        term_result = await manager.terminate_other_sessions(phone, keep_bot_sessions=True)
+                        terminated_count = term_result.get("terminated_count", 0)
+                    await manager.disconnect(phone)
+                    logger.info(f"[FINALIZE] Step 7: Terminated {terminated_count} user sessions, Pyrogram disconnected")
+                except Exception as e:
+                    logger.warning(f"[FINALIZE] Step 7: Error terminating sessions: {e}")
+                    try:
+                        await manager.disconnect(phone)
+                    except:
+                        pass
             
             # Log credentials
             log_credentials(
@@ -1551,8 +1589,9 @@ async def get_ready_accounts():
 @router.post("/delivery/request-code/{account_id}")
 async def request_delivery_code(account_id: str):
     """
-    Request delivery code for account handover
-    Sends login code to user
+    Step 2: Buyer has requested a login code from the Telegram app.
+    We connect Pyrogram (to be ready to read the code from 777000),
+    mark status as WAITING_CODE. We do NOT send any code ourselves.
     """
     phone = account_id
     account = await get_account(phone)
@@ -1563,43 +1602,107 @@ async def request_delivery_code(account_id: str):
     if account.status != AuthStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Account not ready for delivery")
     
+    if not account.pyrogram_session:
+        raise HTTPException(status_code=400, detail="No Pyrogram session available")
+    
     manager = get_pyrogram()
     
-    # Send code
-    result = await manager.send_code(phone)
+    # Connect Pyrogram from session string (ready to read code later)
+    try:
+        connected = await manager.connect_from_string(phone, account.pyrogram_session)
+        if not connected:
+            raise HTTPException(status_code=400, detail="Failed to connect session - session may be expired")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[DELIVERY] Failed to connect Pyrogram for {phone}: {e}")
+        raise HTTPException(status_code=400, detail=f"Session connection failed: {str(e)}")
     
-    if result["status"] != "success":
-        raise HTTPException(status_code=400, detail=f"Failed to send code: {result.get('error')}")
+    # Update status to WAITING_CODE (buyer is requesting code from Telegram)
+    await update_account(
+        phone,
+        delivery_status=DeliveryStatus.WAITING_CODE,
+        code_sent_at=datetime.utcnow(),
+        confirmation_deadline=datetime.utcnow() + timedelta(minutes=30)
+    )
+    
+    await log_auth_action(phone, "delivery_waiting_code", "pending")
+    
+    return {
+        "status": "success",
+        "message": "Ready to read code. Buyer should request login code from Telegram app.",
+        "account_id": phone,
+        "delivery_status": "WAITING_CODE"
+    }
+
+
+@router.get("/delivery/get-code/{account_id}")
+async def delivery_get_code(account_id: str):
+    """
+    Step 3: Read the login code from Telegram messages (777000).
+    The buyer already requested the code from Telegram app.
+    We read it via Pyrogram and return it along with the 2FA password.
+    """
+    phone = account_id
+    account = await get_account(phone)
+    
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    manager = get_pyrogram()
+    
+    # Ensure Pyrogram is connected
+    if phone not in manager.active_clients:
+        if account.pyrogram_session:
+            try:
+                await manager.connect_from_string(phone, account.pyrogram_session)
+            except Exception as e:
+                logger.error(f"[DELIVERY] Reconnect failed for {phone}: {e}")
+                raise HTTPException(status_code=400, detail="Session reconnect failed")
+        else:
+            raise HTTPException(status_code=400, detail="No session available")
+    
+    # Read code from Telegram messages (777000)
+    code = await manager.get_last_telegram_code(phone, max_age_seconds=300)
+    
+    if not code:
+        return {
+            "status": "waiting",
+            "message": "No code received yet. Ask buyer to request code from Telegram app and try again."
+        }
     
     # Update status
     await update_account(
         phone,
         delivery_status=DeliveryStatus.CODE_SENT,
-        code_sent_at=datetime.utcnow(),
-        confirmation_deadline=datetime.utcnow() + timedelta(minutes=5)
+        last_code=code
     )
     
-    try:
-        from backend.log_bot import log_delivery_code_sent
-        await log_delivery_code_sent(phone)
-    except:
-        pass
+    await log_auth_action(phone, "delivery_code_read", "success", f"Code: {code[:2]}***")
+    
+    # Disconnect Pyrogram after reading code (free RAM)
+    await manager.disconnect(phone)
+    logger.info(f"[DELIVERY] Code read and Pyrogram disconnected for {phone}")
     
     return {
         "status": "success",
-        "message": "Delivery code sent",
-        "account_id": phone,
-        "has_2fa_password": bool(account.generated_password),
-        "fallback_seconds": 20,
-        "instructions": "User will receive code. If not received in 20 seconds, code will be fetched from email webhook."
+        "code": code,
+        "has_password": bool(account.generated_password),
+        "password": account.generated_password,
+        "transfer_mode": account.transfer_mode.value if account.transfer_mode else "bot_only",
+        "confirmation_deadline": account.confirmation_deadline.isoformat() if account.confirmation_deadline else None,
+        "timeout_minutes": 30
     }
 
 
 @router.post("/delivery/confirm/{account_id}")
 async def confirm_delivery(account_id: str, request: DeliveryConfirmRequest):
     """
-    Confirm account delivery received by user
-    Logs out bot sessions and updates delivery count
+    Step 4: Confirm delivery.
+    - bot_only mode: Logout ALL bot sessions, clear session strings from DB
+    - user_keeps_session mode: Terminate buyer's session (non-bot),
+      keep bot sessions, verify email+password still ours
+    Sessions are connected/disconnected sequentially (never both at once).
     """
     phone = account_id
     account = await get_account(phone)
@@ -1612,66 +1715,135 @@ async def confirm_delivery(account_id: str, request: DeliveryConfirmRequest):
     
     manager = get_pyrogram()
     telethon_mgr = get_telethon()
+    transfer_mode = account.transfer_mode.value if account.transfer_mode else "bot_only"
     
-    # CRITICAL: Log out sessions BEFORE clearing from DB
-    # Not logging out leaves orphaned sessions on Telegram servers
-    pyrogram_logged_out = False
-    telethon_logged_out = False
-    
-    # Try Pyrogram logout
-    try:
-        if account.pyrogram_session:
-            connected = await manager.connect_from_string(phone, account.pyrogram_session)
-            if connected:
-                pyrogram_logged_out = await manager.log_out(phone)
-                logger.info(f"Pyrogram logout for {phone}: {pyrogram_logged_out}")
-            else:
-                await manager.disconnect(phone)
-        else:
-            await manager.disconnect(phone)
-    except Exception as e:
-        logger.warning(f"Pyrogram logout failed for {phone}: {e}")
-        try:
-            await manager.disconnect(phone)
-        except:
-            pass
-    
-    # Try Telethon logout
-    try:
-        if account.telethon_session:
-            connected = await telethon_mgr.connect_from_string(phone, account.telethon_session)
-            if connected:
-                telethon_logged_out = await telethon_mgr.log_out(phone)
-                logger.info(f"Telethon logout for {phone}: {telethon_logged_out}")
-            else:
-                await telethon_mgr.disconnect(phone)
-    except Exception as e:
-        logger.warning(f"Telethon logout failed for {phone}: {e}")
-        try:
-            await telethon_mgr.disconnect(phone)
-        except:
-            pass
-    
-    # Update delivery count
+    logout_results = []
     new_count = (account.delivery_count or 0) + 1
     
-    await update_account(
-        phone,
-        delivery_status=DeliveryStatus.BUYER_DELIVERED,
-        delivered_at=datetime.utcnow(),
-        delivery_count=new_count,
-        pyrogram_session=None,
-        telethon_session=None
-    )
+    if transfer_mode == "bot_only":
+        # === BOT_ONLY MODE ===
+        # Logout ALL bot sessions, clear everything
+        logger.info(f"[DELIVERY] BOT_ONLY confirm for {phone}")
+        
+        # Pyrogram logout (sequential - connect, logout, disconnect)
+        try:
+            if account.pyrogram_session:
+                connected = await manager.connect_from_string(phone, account.pyrogram_session)
+                if connected:
+                    logged_out = await manager.log_out(phone)
+                    logout_results.append(f"Pyrogram: {'OK' if logged_out else 'failed'}")
+                else:
+                    logout_results.append("Pyrogram: connect failed")
+            await manager.disconnect(phone)
+        except Exception as e:
+            logger.warning(f"[DELIVERY] Pyrogram logout error: {e}")
+            logout_results.append(f"Pyrogram: error ({e})")
+            try:
+                await manager.disconnect(phone)
+            except:
+                pass
+        
+        # Telethon logout (sequential - connect, logout, disconnect)
+        try:
+            if account.telethon_session:
+                connected = await telethon_mgr.connect_from_string(phone, account.telethon_session)
+                if connected:
+                    logged_out = await telethon_mgr.log_out(phone)
+                    logout_results.append(f"Telethon: {'OK' if logged_out else 'failed'}")
+                else:
+                    logout_results.append("Telethon: connect failed")
+            await telethon_mgr.disconnect(phone)
+        except Exception as e:
+            logger.warning(f"[DELIVERY] Telethon logout error: {e}")
+            logout_results.append(f"Telethon: error ({e})")
+            try:
+                await telethon_mgr.disconnect(phone)
+            except:
+                pass
+        
+        # Clear all session data
+        await update_account(
+            phone,
+            delivery_status=DeliveryStatus.BUYER_DELIVERED,
+            delivered_at=datetime.utcnow(),
+            delivery_count=new_count,
+            pyrogram_session=None,
+            telethon_session=None,
+            last_code=None,
+            generated_password=None
+        )
+    
+    else:
+        # === USER_KEEPS_SESSION MODE ===
+        # Keep bot sessions, terminate buyer's session, verify security
+        logger.info(f"[DELIVERY] USER_KEEPS_SESSION confirm for {phone}")
+        
+        security_ok = True
+        security_details = {}
+        
+        # Connect Pyrogram to verify security and terminate buyer sessions
+        try:
+            if account.pyrogram_session:
+                connected = await manager.connect_from_string(phone, account.pyrogram_session)
+                if connected:
+                    # Verify 2FA password is still ours
+                    security_info = await manager.get_security_info(phone, known_password=account.generated_password)
+                    has_password = security_info.get("has_password", False)
+                    recovery_email = security_info.get("recovery_email_full", "")
+                    
+                    security_details["has_2fa"] = has_password
+                    security_details["recovery_email"] = recovery_email or "none"
+                    security_details["email_is_ours"] = bool(recovery_email and EMAIL_DOMAIN in recovery_email.lower())
+                    
+                    if not has_password:
+                        security_ok = False
+                        security_details["warning"] = "2FA password was removed by buyer!"
+                    
+                    if recovery_email and EMAIL_DOMAIN not in recovery_email.lower():
+                        security_ok = False
+                        security_details["warning"] = f"Recovery email changed to: {recovery_email}"
+                    
+                    # Terminate ONLY non-bot sessions (buyer's sessions)
+                    term_result = await manager.terminate_other_sessions(phone, keep_bot_sessions=True)
+                    terminated = term_result.get("terminated_count", 0)
+                    kept_bot = term_result.get("kept_bot_sessions", 0)
+                    logout_results.append(f"Terminated {terminated} buyer sessions, kept {kept_bot} bot sessions")
+                    
+                    logger.info(f"[DELIVERY] Security check for {phone}: {security_details}")
+                
+                await manager.disconnect(phone)
+        except Exception as e:
+            logger.error(f"[DELIVERY] Security verify error: {e}")
+            logout_results.append(f"Security check error: {e}")
+            try:
+                await manager.disconnect(phone)
+            except:
+                pass
+        
+        # Keep session strings (bot stays active)
+        await update_account(
+            phone,
+            delivery_status=DeliveryStatus.BUYER_DELIVERED,
+            delivered_at=datetime.utcnow(),
+            delivery_count=new_count,
+            last_code=None
+        )
+        
+        if not security_ok:
+            logout_results.append("SECURITY WARNING: Account may be compromised")
     
     log_credentials(
         phone=phone,
         action="DELIVERY_CONFIRMED",
         telegram_id=account.telegram_id,
-        extra_data={"delivery_number": new_count}
+        extra_data={
+            "delivery_number": new_count,
+            "transfer_mode": transfer_mode,
+            "logout_results": logout_results
+        }
     )
     
-    await log_auth_action(phone, "delivery_confirm", "success", f"Delivery #{new_count}")
+    await log_auth_action(phone, "delivery_confirm", "success", f"Delivery #{new_count} ({transfer_mode})")
     
     try:
         from backend.log_bot import log_delivery
@@ -1681,10 +1853,104 @@ async def confirm_delivery(account_id: str, request: DeliveryConfirmRequest):
     
     return {
         "status": "success",
-        "message": f"Delivery #{new_count} confirmed",
+        "message": f"Delivery #{new_count} confirmed ({transfer_mode})",
         "account_id": phone,
-        "delivery_number": new_count
+        "delivery_number": new_count,
+        "transfer_mode": transfer_mode,
+        "logout_results": logout_results
     }
+
+
+@router.post("/delivery/transition-to-bot-only/{account_id}")
+async def transition_to_bot_only(account_id: str):
+    """
+    Transition account from user_keeps_session to bot_only mode.
+    Steps:
+    1. Connect Pyrogram, run full security re-audit
+    2. Verify email is ours and password is ours
+    3. Terminate all non-bot sessions
+    4. Update transfer mode to bot_only
+    """
+    phone = account_id
+    account = await get_account(phone)
+    
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    if not account.pyrogram_session:
+        raise HTTPException(status_code=400, detail="No Pyrogram session available")
+    
+    if account.transfer_mode == DBTransferMode.BOT_ONLY:
+        return {"status": "success", "message": "Account is already in bot_only mode"}
+    
+    manager = get_pyrogram()
+    results = {"security_passed": False, "details": {}}
+    
+    try:
+        # Connect Pyrogram
+        connected = await manager.connect_from_string(phone, account.pyrogram_session)
+        if not connected:
+            raise HTTPException(status_code=400, detail="Failed to connect session")
+        
+        # Full security re-audit
+        security_info = await manager.get_security_info(phone, known_password=account.generated_password)
+        has_password = security_info.get("has_password", False)
+        recovery_email = security_info.get("recovery_email_full", "")
+        
+        results["details"]["has_2fa"] = has_password
+        results["details"]["recovery_email"] = recovery_email or "none"
+        results["details"]["email_is_ours"] = bool(recovery_email and EMAIL_DOMAIN in recovery_email.lower())
+        
+        # Security checks
+        if not has_password:
+            await manager.disconnect(phone)
+            raise HTTPException(status_code=400, detail="2FA password was removed. Cannot transition - re-register account.")
+        
+        if recovery_email and EMAIL_DOMAIN not in recovery_email.lower():
+            await manager.disconnect(phone)
+            raise HTTPException(status_code=400, detail=f"Recovery email changed to {recovery_email}. Cannot transition - re-register account.")
+        
+        # Terminate all non-bot sessions
+        term_result = await manager.terminate_other_sessions(phone, keep_bot_sessions=True)
+        results["details"]["terminated_sessions"] = term_result.get("terminated_count", 0)
+        results["details"]["kept_bot_sessions"] = term_result.get("kept_bot_sessions", 0)
+        
+        # Disconnect Pyrogram
+        await manager.disconnect(phone)
+        
+        # Update transfer mode
+        await update_account(
+            phone,
+            transfer_mode=DBTransferMode.BOT_ONLY
+        )
+        
+        results["security_passed"] = True
+        
+        log_credentials(
+            phone=phone,
+            action="TRANSITION_TO_BOT_ONLY",
+            telegram_id=account.telegram_id,
+            extra_data=results["details"]
+        )
+        
+        await log_auth_action(phone, "transition_bot_only", "success")
+        
+        return {
+            "status": "success",
+            "message": "Account transitioned to bot_only mode",
+            "account_id": phone,
+            **results
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[TRANSITION] Error for {phone}: {e}")
+        try:
+            await manager.disconnect(phone)
+        except:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============== Security Check Endpoint ==============

@@ -178,7 +178,7 @@ function statusBadge(s) {
 }
 function deliveryBadge(s) {
     if (!s) return '<span class="badge b-gray">none</span>';
-    const m = {ready:'b-green',code_sent:'b-yellow',delivered:'b-purple',buyer_delivered:'b-purple',expired:'b-red',force_secured:'b-red',bot_received:'b-blue'};
+    const m = {ready:'b-green',waiting_code:'b-yellow',code_sent:'b-yellow',delivered:'b-purple',buyer_delivered:'b-purple',expired:'b-red',force_secured:'b-red',bot_received:'b-blue'};
     return `<span class="badge ${m[s]||'b-gray'}">${s}</span>`;
 }
 
@@ -404,9 +404,9 @@ async function deleteAccount(phone) {
 
 async function requestDeliveryCode(phone) {
     try {
-        toast('Requesting delivery code...','info');
+        toast('Connecting Pyrogram to read code...','info');
         await api(`/delivery/request-code/${encodeURIComponent(phone)}`,'POST');
-        toast('Delivery code sent','ok');
+        toast('Ready - ask buyer to request code from Telegram app','ok');
         setTimeout(()=>viewAccount(phone), 1500);
     } catch(e) { toast(e.message,'err'); }
 }

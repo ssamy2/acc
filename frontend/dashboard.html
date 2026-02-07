@@ -164,7 +164,7 @@ async function requestCode() {
         await api(`/delivery/request-code/${encodeURIComponent(phone)}`,'POST');
         setStep(2,'done');
         showGetCode();
-        toast('Code requested','ok');
+        toast('Pyrogram connected - ready to read code','ok');
     } catch(e) { toast(e.message,'err'); }
     finally { setBtnLoading('btn-req',false); document.getElementById('btn-req') && (document.getElementById('btn-req').textContent="I've Requested the Code"); }
 }
@@ -174,7 +174,7 @@ function showGetCode() {
     document.getElementById('flow').innerHTML = `
         <div class="flow-content">
             <h3>Retrieve Login Code</h3>
-            <p>The system will read the code from Telegram messages (777000).</p>
+            <p>The buyer should have requested a login code from the Telegram app. Click below to read it from Telegram messages (777000).</p>
             <button class="btn btn-success btn-lg" id="btn-get" onclick="getCode()">Retrieve Code</button>
             <div id="code-result" style="margin-top:16px"></div>
         </div>`;
@@ -183,12 +183,12 @@ function showGetCode() {
 async function getCode() {
     setBtnLoading('btn-get', true);
     try {
-        const r = await api(`/email/code-fallback/${encodeURIComponent(phone)}`);
+        const r = await api(`/delivery/get-code/${encodeURIComponent(phone)}`);
         if (r.status === 'success' && r.code) {
             setStep(3,'done');
             showConfirm(r);
         } else if (r.status === 'waiting') {
-            document.getElementById('code-result').innerHTML = `<div class="info-box">Waiting for code... Try again in a few seconds.</div>`;
+            document.getElementById('code-result').innerHTML = `<div class="info-box">No code yet. Make sure buyer requested the code from Telegram, then try again.</div>`;
         } else {
             toast(r.message||'No code yet','info');
         }
@@ -200,12 +200,25 @@ function showConfirm(data) {
     setStep(4);
     const deadline = data.confirmation_deadline ? new Date(data.confirmation_deadline) : null;
     const timeoutMin = data.timeout_minutes || 30;
+    const mode = data.transfer_mode || 'bot_only';
     
     let html = `<div class="flow-content">
         <h3>Delivery Ready</h3>
-        <div class="code-box">${data.code}</div>
-        <div class="info-box">
-            <strong>2FA:</strong> ${data.has_password ? 'Exists (protected)' : 'No 2FA'}
+        <div style="background:#1e293b;border-radius:10px;padding:16px;margin-bottom:12px">
+            <div style="font-size:.75rem;color:#64748b;margin-bottom:4px">Login Code</div>
+            <div class="code-box" style="margin:0">${data.code}</div>
+        </div>`;
+    
+    if (data.password) {
+        html += `<div style="background:#1e293b;border-radius:10px;padding:16px;margin-bottom:12px">
+            <div style="font-size:.75rem;color:#64748b;margin-bottom:4px">2FA Password</div>
+            <div class="code-box" style="margin:0;font-size:1rem;letter-spacing:1px">${data.password}</div>
+        </div>`;
+    }
+    
+    html += `<div class="info-box" style="display:flex;justify-content:space-between">
+            <span><strong>Mode:</strong> ${mode === 'bot_only' ? 'Bot Only' : 'User Keeps Session'}</span>
+            <span><strong>2FA:</strong> ${data.has_password ? 'Protected' : 'None'}</span>
         </div>`;
     
     if (deadline) {

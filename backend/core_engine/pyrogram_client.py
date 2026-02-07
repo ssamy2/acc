@@ -398,9 +398,16 @@ class PyrogramSessionManager:
             logger.error(f"Error getting security info: {e} (duration: {duration:.2f}s)")
             return {"status": "error", "error": str(e), "duration": duration}
     
-    async def terminate_other_sessions(self, phone: str) -> Dict[str, Any]:
+    async def terminate_other_sessions(self, phone: str, keep_bot_sessions: bool = True) -> Dict[str, Any]:
+        """
+        Terminate other sessions for this account.
+        
+        Args:
+            keep_bot_sessions: If True, preserve sessions with same API_ID (our bot sessions).
+                               Only terminate sessions from other apps (user sessions).
+        """
         start_time = time.time()
-        logger.info(f"Terminating other sessions for {phone}")
+        logger.info(f"Terminating other sessions for {phone} (keep_bot={keep_bot_sessions})")
         
         client = self.active_clients.get(phone)
         if not client:
@@ -410,18 +417,39 @@ class PyrogramSessionManager:
             authorizations = await client.invoke(functions.account.GetAuthorizations())
             
             terminated = 0
+            kept_bot = 0
+            total_other = 0
+            
             for auth in authorizations.authorizations:
-                if not auth.current:
-                    try:
-                        await client.invoke(functions.account.ResetAuthorization(hash=auth.hash))
-                        terminated += 1
-                        logger.info(f"Terminated session: {auth.device_model} ({auth.app_name})")
-                    except Exception as e:
-                        logger.warning(f"Failed to terminate session {auth.hash}: {e}")
+                if auth.current:
+                    continue
+                
+                total_other += 1
+                
+                # Check if this is a bot session (same API_ID as ours)
+                is_bot_session = (auth.api_id == self.api_id) if keep_bot_sessions else False
+                
+                if is_bot_session:
+                    kept_bot += 1
+                    logger.info(f"Keeping bot session: {auth.device_model} ({auth.app_name}, api_id={auth.api_id})")
+                    continue
+                
+                try:
+                    await client.invoke(functions.account.ResetAuthorization(hash=auth.hash))
+                    terminated += 1
+                    logger.info(f"Terminated session: {auth.device_model} ({auth.app_name}, api_id={auth.api_id})")
+                except Exception as e:
+                    logger.warning(f"Failed to terminate session {auth.hash}: {e}")
             
             duration = time.time() - start_time
-            logger.info(f"Terminated {terminated} sessions (duration: {duration:.2f}s)")
-            return {"status": "success", "terminated_count": terminated, "duration": duration}
+            logger.info(f"Terminated {terminated}/{total_other} other sessions, kept {kept_bot} bot sessions (duration: {duration:.2f}s)")
+            return {
+                "status": "success",
+                "terminated_count": terminated,
+                "kept_bot_sessions": kept_bot,
+                "total_other": total_other,
+                "duration": duration
+            }
             
         except Exception as e:
             duration = time.time() - start_time
