@@ -59,6 +59,14 @@ def store_code(email_hash: str, code: str, extra_data: Dict[str, Any] = None):
     logger.info(f"💾 Code stored for hash: {email_hash}")
 
 
+def clear_codes_for_hash(email_hash: str):
+    """Clear stored codes for a hash (prevent stale code reuse)"""
+    email_hash = email_hash.lower() if email_hash else email_hash
+    if email_hash and email_hash in email_codes_store:
+        del email_codes_store[email_hash]
+        logger.info(f"🗑️ Cleared stored code for hash: {email_hash}")
+
+
 class EmailPayload(BaseModel):
     """Expected payload from Cloudflare Email Worker"""
     from_email: Optional[str] = None

