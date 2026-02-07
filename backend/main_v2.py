@@ -27,12 +27,21 @@ CLEANUP_INTERVAL_SECONDS = 300  # 5 minutes
 
 
 async def _periodic_cleanup():
-    """Periodically clean up dead/inactive connections to free RAM."""
+    """Periodically clean up dead/inactive connections and expired cache entries."""
     while True:
         try:
             await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
             from backend.api.routes import get_pyrogram, get_telethon
+            from backend.models.database import persistent_cache_cleanup_expired, cleanup_expired_incomplete_sessions
             
+            # --- Clean expired session cache ---
+            try:
+                await persistent_cache_cleanup_expired()
+                await cleanup_expired_incomplete_sessions()
+            except Exception as e:
+                logger.warning(f"[Cleanup] Cache cleanup error: {e}")
+            
+            # --- Clean dead connections ---
             pyrogram_mgr = get_pyrogram()
             cleaned = await pyrogram_mgr.cleanup_inactive_clients()
             

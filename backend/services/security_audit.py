@@ -181,17 +181,22 @@ class SecurityAuditService:
         # login_email_pattern is for "Sign in with email" feature
         # This is a completely different email from the 2FA recovery email
         if login_email_pattern:
-            issue = {
-                "type": "LOGIN_EMAIL_EXISTS",
-                "severity": "action_required",
-                "title": f"Login email exists: {login_email_pattern}",
-                "description": "Login email (separate from 2FA recovery email) - recommended to remove",
-                "action": "Remove login email from: Settings > Privacy & Security > Sign in with Email",
-                "current_email": login_email_pattern,
-                "auto_fixable": False
-            }
-            issues.append(issue)
-            log_audit(logger, phone, "Login Email", False, f"Login email exists: {login_email_pattern}")
+            # If login email is on OUR domain → not an issue (it's ours)
+            if OUR_EMAIL_DOMAIN in str(login_email_pattern).lower():
+                log_audit(logger, phone, "Login Email", True, f"Login email is ours: {login_email_pattern}")
+            else:
+                # Foreign login email → flag as action_required (change, not remove — Telegram doesn't allow removal)
+                issue = {
+                    "type": "LOGIN_EMAIL_EXISTS",
+                    "severity": "action_required",
+                    "title": f"Login email exists: {login_email_pattern}",
+                    "description": "Login email (separate from 2FA recovery email) is not ours — change recommended",
+                    "action": "Change login email from: Settings > Privacy & Security > Sign in with Email",
+                    "current_email": login_email_pattern,
+                    "auto_fixable": False
+                }
+                issues.append(issue)
+                log_audit(logger, phone, "Login Email", False, f"Foreign login email: {login_email_pattern}")
         else:
             log_audit(logger, phone, "Login Email", True, "No login email set")
         

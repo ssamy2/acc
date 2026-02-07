@@ -91,6 +91,46 @@ def add_missing_columns(db_path=DB_PATH):
         else:
             print("\n✅ All columns already exist")
         
+        # --- Create auth_session_cache table if not exists ---
+        try:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS auth_session_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone VARCHAR(20) UNIQUE NOT NULL,
+                    data_json TEXT NOT NULL DEFAULT '{}',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    expires_at DATETIME NOT NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_asc_phone ON auth_session_cache(phone)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_asc_expires ON auth_session_cache(expires_at)")
+            conn.commit()
+            print("✅ auth_session_cache table ready")
+        except Exception as e:
+            print(f"⚠ auth_session_cache: {e}")
+        
+        # --- Create incomplete_sessions table if not exists ---
+        try:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS incomplete_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone VARCHAR(20) NOT NULL,
+                    step VARCHAR(50) NOT NULL,
+                    pyrogram_session TEXT,
+                    telethon_session TEXT,
+                    generated_password VARCHAR(255),
+                    last_code VARCHAR(20),
+                    error_message TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    expires_at DATETIME
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_phone ON incomplete_sessions(phone)")
+            conn.commit()
+            print("✅ incomplete_sessions table ready")
+        except Exception as e:
+            print(f"⚠ incomplete_sessions: {e}")
+        
         # Verify
         final_columns = get_existing_columns(cursor)
         print(f"\nFinal column count: {len(final_columns)}")
