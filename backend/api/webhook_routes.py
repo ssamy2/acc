@@ -33,6 +33,8 @@ def get_code_by_hash(email_hash: str) -> Optional[str]:
     Get verification code by email hash (non-async helper function)
     Returns the code if found and not expired, None otherwise
     """
+    # Normalize to lowercase (webhook stores hashes in lowercase)
+    email_hash = email_hash.lower() if email_hash else email_hash
     if email_hash in email_codes_store:
         data = email_codes_store[email_hash]
         # Check expiry

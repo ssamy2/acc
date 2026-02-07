@@ -446,15 +446,18 @@ class PyrogramSessionManager:
         
         try:
             import datetime
-            cutoff_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=max_age_seconds)
+            # Use naive UTC to match Pyrogram's message.date (which may be naive or aware)
+            cutoff_time = datetime.datetime.utcnow() - datetime.timedelta(seconds=max_age_seconds)
             
             async for message in client.get_chat_history(777000, limit=10):
                 if not message.text:
                     continue
                 
-                # Skip old messages
-                if message.date and message.date < cutoff_time:
-                    break
+                # Skip old messages (handle both naive and aware datetimes)
+                if message.date:
+                    msg_date = message.date.replace(tzinfo=None) if message.date.tzinfo else message.date
+                    if msg_date < cutoff_time:
+                        break
                 
                 # Match 5-6 digit codes
                 codes = re.findall(r'\b(\d{5,6})\b', message.text)
