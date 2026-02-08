@@ -951,8 +951,8 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
                         terminated_count = term_result.get("terminated_count", 0)
                         logger.info(f"[FINALIZE] Step 7: Terminated {terminated_count} user sessions")
                     
-                    # 2. Set low authorization TTL (7 days) - forces re-login sooner
-                    await manager.set_authorization_ttl(phone, ttl_days=7)
+                    # 2. Set authorization TTL (12 months)
+                    await manager.set_authorization_ttl(phone, ttl_days=365)
                     
                     # 3. Reset all web authorizations
                     await manager.reset_web_authorizations(phone)
