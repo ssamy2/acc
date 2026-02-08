@@ -675,7 +675,10 @@ class PyrogramSessionManager:
         client = self.active_clients.pop(phone, None)
         if client:
             try:
-                await client.disconnect()
+                if getattr(client, 'is_initialized', False):
+                    await client.stop()
+                else:
+                    await client.disconnect()
                 logger.info(f"Disconnected: {phone}")
             except Exception as e:
                 logger.error(f"Error disconnecting: {e}")
@@ -718,7 +721,10 @@ class PyrogramSessionManager:
                 await asyncio.wait_for(client.get_me(), timeout=5)
             except (asyncio.TimeoutError, Exception):
                 try:
-                    await client.disconnect()
+                    if getattr(client, 'is_initialized', False):
+                        await client.stop()
+                    else:
+                        await client.disconnect()
                 except:
                     pass
                 self.active_clients.pop(phone, None)
