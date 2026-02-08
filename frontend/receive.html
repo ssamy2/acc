@@ -293,14 +293,28 @@ async function viewAccount(phone) {
             h += `</div>`;
         }
 
+        // ---- Transfer Mode ----
+        h += `<div class="section-title">Transfer Mode</div>`;
+        const tm = a.transfer_mode || 'bot_only';
+        const tmColor = tm === 'bot_only' ? '#22c55e' : '#f59e0b';
+        h += drow('Current Mode', `<span style="color:${tmColor};font-weight:600">${tm === 'bot_only' ? 'Bot Only' : 'User Keeps Session'}</span>`);
+        if (tm === 'user_keeps_session') {
+            h += `<div style="background:#422006;border:1px solid #854d0e;border-radius:8px;padding:10px 14px;font-size:.82rem;color:#fbbf24;margin:8px 0">
+                Account is in user_keeps_session mode. Must transition to bot_only before delivery.
+            </div>`;
+            h += `<button class="btn btn-primary btn-sm" style="margin:4px 0" onclick="transitionToBotOnly('${a.phone}')">Transition to Bot Only</button>`;
+        }
+
         // ---- Actions ----
+        h += `<div class="section-title">Actions</div>`;
         h += `<div class="actions-bar">
             <button class="btn btn-success btn-sm" onclick="fixAccount('${a.phone}','set_completed')">Set Completed</button>
             <button class="btn btn-warn btn-sm" onclick="fixAccount('${a.phone}','reset_delivery')">Reset Delivery</button>
             <button class="btn btn-primary btn-sm" onclick="fixAccount('${a.phone}','set_bot_received')">Set Bot Received</button>
             <button class="btn btn-warn btn-sm" onclick="terminateAllSessions('${a.phone}')">Kill All Sessions</button>
             <button class="btn btn-danger btn-sm" onclick="logoutOurSessions('${a.phone}')">Logout Our Sessions</button>
-            <button class="btn btn-danger btn-sm" onclick="securityCheck('${a.phone}')">Security Check</button>
+            <button class="btn btn-primary btn-sm" onclick="securityCheck('${a.phone}')">Security Check</button>
+            <button class="btn btn-warn btn-sm" onclick="changePhone('${a.phone}')">Change Phone</button>
             <button class="btn btn-danger btn-sm" onclick="deleteAccount('${a.phone}')">Delete Account</button>
         </div>`;
 
@@ -382,11 +396,57 @@ async function securityCheck(phone) {
     toast('Running security check...','info');
     try {
         const r = await api(`/security/check/${encodeURIComponent(phone)}`);
-        let msg = `Threat: ${r.threat_level.toUpperCase()}`;
-        if (r.frozen) msg += ' | FROZEN';
-        if (r.red_flags.length) msg += ` | ${r.red_flags.length} red flags`;
-        toast(msg, r.threat_level==='safe'?'ok':'err');
+        let parts = [`Threat: ${r.threat_level.toUpperCase()}`];
+        if (r.frozen) parts.push('FROZEN');
+        parts.push(`Mode: ${r.transfer_mode}`);
+        parts.push(`Bot: ${r.bot_sessions_count}, User: ${r.user_sessions_count}`);
+        if (r.delivery_ready) parts.push('DELIVERY READY');
+        if (r.transition_needed) parts.push('TRANSITION NEEDED');
+        if (r.red_flags.length) parts.push(`${r.red_flags.length} red flag(s)`);
+        
+        let detail = parts.join(' | ');
+        if (r.red_flags.length) {
+            detail += '\n\nRed Flags:\n' + r.red_flags.map(f => '- ' + (f.message || f.type)).join('\n');
+        }
+        if (r.warnings.length) {
+            detail += '\n\nWarnings:\n' + r.warnings.map(w => '- ' + (w.message || w.type)).join('\n');
+        }
+        alert(detail);
+        toast(parts[0], r.threat_level==='safe'?'ok':'err');
         viewAccount(phone);
+    } catch(e) { toast(e.message,'err'); }
+}
+
+async function transitionToBotOnly(phone) {
+    if (!confirm('Transition to bot_only mode? User must have terminated all their sessions first.')) return;
+    toast('Checking conditions...','info');
+    try {
+        const r = await api(`/delivery/transition-to-bot-only/${encodeURIComponent(phone)}`,'POST');
+        if (r.status === 'blocked') {
+            alert('Cannot transition:\n\n' + r.blockers.join('\n'));
+            toast('Transition blocked','err');
+        } else {
+            toast('Transitioned to bot_only!','ok');
+        }
+        viewAccount(phone);
+    } catch(e) { toast(e.message,'err'); }
+}
+
+async function changePhone(phone) {
+    const newPhone = prompt('Enter new phone number (with +):', phone);
+    if (!newPhone || newPhone === phone) return;
+    try {
+        const r = await api(`/account/change-phone/${encodeURIComponent(phone)}`,'POST',{new_phone:newPhone});
+        if (r.status === 'mismatch') {
+            alert(`Phone mismatch!\nTelegram reports: ${r.telegram_phone}\nYou entered: ${r.requested_phone}`);
+            toast('Phone mismatch','err');
+        } else if (r.status === 'success') {
+            toast(`Phone changed to ${r.new_phone}`,'ok');
+            closeModal();
+            loadDashboard();
+        } else {
+            toast(r.message || 'Unknown response','err');
+        }
     } catch(e) { toast(e.message,'err'); }
 }
 

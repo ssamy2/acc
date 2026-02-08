@@ -155,13 +155,18 @@ async def log_session_registered(phone: str, session_type: str = "pyrogram"):
         f"⏰ {_now()}"
     )
 
-async def log_security_check(phone: str, threat_level: str, red_flags: list = None, frozen: bool = False):
-    flags_txt = "\n".join([f"  🔴 {f}" for f in (red_flags or [])]) or "  None"
+async def log_security_check(phone: str, threat_level: str, red_flags: list = None, frozen: bool = False,
+                             transfer_mode: str = None, bot_sessions: int = 0, user_sessions: int = 0):
+    flags_txt = "\n".join([f"  🔴 {f}" for f in (red_flags or [])]) or "  ✅ None"
+    mode_txt = f"📋 Mode: <b>{transfer_mode or 'unknown'}</b>\n" if transfer_mode else ""
+    sess_txt = f"🤖 Bot sessions: {bot_sessions} | 👤 User sessions: {user_sessions}\n"
     await send_log(
         f"🛡️ <b>SECURITY CHECK</b>\n\n"
         f"📱 Phone: <code>{phone}</code>\n"
         f"⚠️ Threat: <b>{threat_level.upper()}</b>\n"
-        f"{'🧊 <b>FROZEN</b>' if frozen else ''}\n"
+        f"{mode_txt}"
+        f"{sess_txt}"
+        f"{'🧊 <b>FROZEN</b>\n' if frozen else ''}"
         f"🚩 Red Flags:\n{flags_txt}\n"
         f"⏰ {_now()}"
     )

