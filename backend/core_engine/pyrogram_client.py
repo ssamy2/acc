@@ -331,6 +331,9 @@ class PyrogramSessionManager:
                     "region": auth.region,
                     "is_current": auth.current,
                     "is_official_app": getattr(auth, 'official_app', False),
+                    "password_pending": getattr(auth, 'password_pending', False),
+                    "encrypted_requests_disabled": getattr(auth, 'encrypted_requests_disabled', False),
+                    "call_requests_disabled": getattr(auth, 'call_requests_disabled', False),
                 }
                 
                 if auth.current:
@@ -370,6 +373,12 @@ class PyrogramSessionManager:
             if known_password and password_info.has_password:
                 recovery_email_full = await self.get_recovery_email_full(phone, known_password)
             
+            # Count password_pending sessions (logged in but haven't entered 2FA)
+            password_pending_sessions = [s for s in sessions if s.get("password_pending")]
+            
+            # Get authorization TTL
+            auth_ttl_days = getattr(authorizations, 'authorization_ttl_days', None)
+            
             security_info = {
                 "status": "success",
                 # 2FA
@@ -386,6 +395,8 @@ class PyrogramSessionManager:
                 "current_session": current_session,
                 "other_sessions": sessions,
                 "other_sessions_count": len(sessions),
+                "password_pending_sessions": len(password_pending_sessions),
+                "authorization_ttl_days": auth_ttl_days,
             }
             
             duration = time.time() - start_time
@@ -936,6 +947,84 @@ class PyrogramSessionManager:
         except Exception as e:
             duration = time.time() - start_time
             logger.error(f"Error cancelling email change: {e} (duration: {duration:.2f}s)")
+            return {"status": "error", "error": str(e), "duration": duration}
+    
+    async def invalidate_sign_in_codes(self, phone: str, codes: list) -> Dict[str, Any]:
+        """
+        Invalidate sign-in codes to prevent reuse.
+        Should be called after reading codes from 777000 messages.
+        """
+        start_time = time.time()
+        logger.info(f"Invalidating {len(codes)} sign-in codes for {phone}")
+        
+        client = self.active_clients.get(phone)
+        if not client:
+            return {"status": "error", "error": "Session not found."}
+        
+        try:
+            # Strip any dashes from codes
+            clean_codes = [c.replace("-", "").strip() for c in codes if c]
+            if not clean_codes:
+                return {"status": "success", "message": "No codes to invalidate"}
+            
+            await client.invoke(
+                functions.account.InvalidateSignInCodes(codes=clean_codes)
+            )
+            
+            duration = time.time() - start_time
+            logger.info(f"Invalidated {len(clean_codes)} codes for {phone} (duration: {duration:.2f}s)")
+            return {"status": "success", "invalidated": len(clean_codes), "duration": duration}
+            
+        except Exception as e:
+            duration = time.time() - start_time
+            logger.error(f"Error invalidating codes: {e} (duration: {duration:.2f}s)")
+            return {"status": "error", "error": str(e), "duration": duration}
+    
+    async def set_authorization_ttl(self, phone: str, ttl_days: int = 7) -> Dict[str, Any]:
+        """
+        Set the TTL for inactive sessions.
+        Lower TTL = sessions expire faster = forces re-login sooner.
+        """
+        start_time = time.time()
+        logger.info(f"Setting authorization TTL to {ttl_days} days for {phone}")
+        
+        client = self.active_clients.get(phone)
+        if not client:
+            return {"status": "error", "error": "Session not found."}
+        
+        try:
+            await client.invoke(
+                functions.account.SetAuthorizationTTL(authorization_ttl_days=ttl_days)
+            )
+            
+            duration = time.time() - start_time
+            logger.info(f"Authorization TTL set to {ttl_days} days for {phone} (duration: {duration:.2f}s)")
+            return {"status": "success", "ttl_days": ttl_days, "duration": duration}
+            
+        except Exception as e:
+            duration = time.time() - start_time
+            logger.error(f"Error setting TTL: {e} (duration: {duration:.2f}s)")
+            return {"status": "error", "error": str(e), "duration": duration}
+    
+    async def reset_web_authorizations(self, phone: str) -> Dict[str, Any]:
+        """Reset ALL web authorizations (Telegram Web logins)."""
+        start_time = time.time()
+        logger.info(f"Resetting web authorizations for {phone}")
+        
+        client = self.active_clients.get(phone)
+        if not client:
+            return {"status": "error", "error": "Session not found."}
+        
+        try:
+            await client.invoke(functions.account.ResetWebAuthorizations())
+            
+            duration = time.time() - start_time
+            logger.info(f"Web authorizations reset for {phone} (duration: {duration:.2f}s)")
+            return {"status": "success", "message": "All web authorizations revoked", "duration": duration}
+            
+        except Exception as e:
+            duration = time.time() - start_time
+            logger.error(f"Error resetting web authorizations: {e} (duration: {duration:.2f}s)")
             return {"status": "error", "error": str(e), "duration": duration}
     
     async def get_me_info(self, phone: str) -> Dict[str, Any]:

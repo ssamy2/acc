@@ -845,6 +845,7 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             logger.info(f"[FINALIZE] Step 6: Creating Telethon session for {phone}")
             telethon_manager = get_telethon()
             telethon_session_string = None
+            code = None
             
             try:
                 await asyncio.sleep(2)
@@ -939,22 +940,35 @@ async def finalize_account(account_id: str, request: FinalizeRequest, req: Reque
             except:
                 pass
             
-            # Terminate other (non-bot) sessions if bot_only mode
+            # Security hardening: terminate sessions, set TTL, invalidate codes, reset web auths
             terminated_count = 0
-            if account.transfer_mode == DBTransferMode.BOT_ONLY:
-                try:
-                    reconnected = await manager.connect_from_string(phone, pyrogram_session)
-                    if reconnected:
+            try:
+                reconnected = await manager.connect_from_string(phone, pyrogram_session)
+                if reconnected:
+                    # 1. Terminate non-bot sessions
+                    if account.transfer_mode == DBTransferMode.BOT_ONLY:
                         term_result = await manager.terminate_other_sessions(phone, keep_bot_sessions=True)
                         terminated_count = term_result.get("terminated_count", 0)
+                        logger.info(f"[FINALIZE] Step 7: Terminated {terminated_count} user sessions")
+                    
+                    # 2. Set low authorization TTL (7 days) - forces re-login sooner
+                    await manager.set_authorization_ttl(phone, ttl_days=7)
+                    
+                    # 3. Reset all web authorizations
+                    await manager.reset_web_authorizations(phone)
+                    
+                    # 4. Invalidate any sign-in codes we read from 777000
+                    if code:
+                        await manager.invalidate_sign_in_codes(phone, [code])
+                
+                await manager.disconnect(phone)
+                logger.info(f"[FINALIZE] Step 7: Security hardening complete, Pyrogram disconnected")
+            except Exception as e:
+                logger.warning(f"[FINALIZE] Step 7: Error in security hardening: {e}")
+                try:
                     await manager.disconnect(phone)
-                    logger.info(f"[FINALIZE] Step 7: Terminated {terminated_count} user sessions, Pyrogram disconnected")
-                except Exception as e:
-                    logger.warning(f"[FINALIZE] Step 7: Error terminating sessions: {e}")
-                    try:
-                        await manager.disconnect(phone)
-                    except:
-                        pass
+                except:
+                    pass
             
             # Log credentials
             log_credentials(
@@ -1602,6 +1616,14 @@ async def request_delivery_code(account_id: str):
     if account.status != AuthStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Account not ready for delivery")
     
+    # SECURITY: Only allow delivery for bot_only accounts
+    transfer_mode = account.transfer_mode.value if account.transfer_mode else "bot_only"
+    if transfer_mode != "bot_only":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Delivery blocked: account is in '{transfer_mode}' mode. Transition to bot_only first via /delivery/transition-to-bot-only"
+        )
+    
     if not account.pyrogram_session:
         raise HTTPException(status_code=400, detail="No Pyrogram session available")
     
@@ -2088,6 +2110,33 @@ async def security_check(account_id: str):
             "type": "pending_reset",
             "message": f"Pending password reset request!",
             "severity": "critical"
+        })
+    
+    # --- Check password_pending sessions (logged in but haven't entered 2FA) ---
+    pw_pending_count = security_info.get("password_pending_sessions", 0)
+    if pw_pending_count > 0:
+        red_flags.append({
+            "type": "password_pending_sessions",
+            "message": f"{pw_pending_count} session(s) logged in WITHOUT entering 2FA password!",
+            "severity": "critical",
+            "count": pw_pending_count
+        })
+    
+    # --- Check login email (passwordless login / passkey-like) ---
+    login_email = security_info.get("login_email_pattern")
+    if login_email:
+        red_flags.append({
+            "type": "login_email_active",
+            "message": f"Login email (passwordless login) is active: {login_email}",
+            "severity": "critical"
+        })
+    
+    # --- Check authorization TTL ---
+    auth_ttl = security_info.get("authorization_ttl_days")
+    if auth_ttl and auth_ttl > 30:
+        warnings.append({
+            "type": "high_auth_ttl",
+            "message": f"Authorization TTL is {auth_ttl} days (should be ≤ 7 for security)"
         })
     
     # --- Determine threat level ---

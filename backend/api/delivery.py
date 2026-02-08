@@ -48,6 +48,14 @@ async def request_delivery_code(account_id: str):
     if account.delivery_status == DeliveryStatus.BUYER_DELIVERED:
         raise HTTPException(status_code=400, detail="Account already delivered")
     
+    # SECURITY: Only allow delivery for bot_only accounts
+    transfer_mode = account.transfer_mode.value if account.transfer_mode else "bot_only"
+    if transfer_mode != "bot_only":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Delivery blocked: account is in '{transfer_mode}' mode. Transition to bot_only first."
+        )
+    
     if not account.pyrogram_session:
         raise HTTPException(status_code=400, detail="No session available")
     

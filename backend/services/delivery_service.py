@@ -43,6 +43,8 @@ class DeliveryService:
                     connected = await pyrogram.connect_from_string(phone, account.pyrogram_session)
                     if connected:
                         await update_account(phone, delivery_status=DeliveryStatus.READY)
+                        # Disconnect after check (free RAM)
+                        await pyrogram.disconnect(phone)
                         duration = time.time() - start_time
                         logger.info(f"Session READY for {phone} (duration: {duration:.2f}s)")
                         return {
@@ -53,6 +55,10 @@ class DeliveryService:
                         }
             except Exception as e:
                 logger.error(f"Pyrogram connection failed: {e}")
+                try:
+                    await pyrogram.disconnect(phone)
+                except:
+                    pass
             
             return {"status": "error", "error": "Failed to connect to session"}
             
@@ -153,43 +159,41 @@ class DeliveryService:
             
             logout_results = []
             
-            if phone not in pyrogram.active_clients and account.pyrogram_session:
-                try:
-                    await pyrogram.connect_from_string(phone, account.pyrogram_session)
-                    logger.info(f"Pyrogram session loaded from DB for {phone}")
-                except Exception as e:
-                    logger.error(f"Failed to load Pyrogram session: {e}")
-            
-            if phone not in telethon.active_clients and account.telethon_session:
-                try:
-                    await telethon.connect_from_string(phone, account.telethon_session)
-                    logger.info(f"Telethon session loaded from DB for {phone}")
-                except Exception as e:
-                    logger.error(f"Failed to load Telethon session: {e}")
-            
+            # Sequential connections: Pyrogram first, disconnect, then Telethon
             try:
-                if phone in pyrogram.active_clients:
-                    await pyrogram.active_clients[phone].log_out()
-                    del pyrogram.active_clients[phone]
-                    logout_results.append("Pyrogram logged out")
-                    logger.info(f"Pyrogram session logged out for {phone}")
-                elif account.pyrogram_session:
-                    logout_results.append("Pyrogram session exists but couldn't connect")
+                if account.pyrogram_session:
+                    connected = await pyrogram.connect_from_string(phone, account.pyrogram_session)
+                    if connected:
+                        logged_out = await pyrogram.log_out(phone)
+                        logout_results.append(f"Pyrogram: {'OK' if logged_out else 'failed'}")
+                    else:
+                        logout_results.append("Pyrogram: connect failed")
+                await pyrogram.disconnect(phone)
             except Exception as e:
                 logger.error(f"Pyrogram logout error: {e}")
-                logout_results.append(f"Pyrogram logout failed: {e}")
+                logout_results.append(f"Pyrogram: error ({e})")
+                try:
+                    await pyrogram.disconnect(phone)
+                except:
+                    pass
             
+            # Now Telethon (after Pyrogram is fully disconnected)
             try:
-                if phone in telethon.active_clients:
-                    await telethon.active_clients[phone].log_out()
-                    del telethon.active_clients[phone]
-                    logout_results.append("Telethon logged out")
-                    logger.info(f"Telethon session logged out for {phone}")
-                elif account.telethon_session:
-                    logout_results.append("Telethon session exists but couldn't connect")
+                if account.telethon_session:
+                    connected = await telethon.connect_from_string(phone, account.telethon_session)
+                    if connected:
+                        logged_out = await telethon.log_out(phone)
+                        logout_results.append(f"Telethon: {'OK' if logged_out else 'failed'}")
+                    else:
+                        logout_results.append("Telethon: connect failed")
+                await telethon.disconnect(phone)
             except Exception as e:
                 logger.error(f"Telethon logout error: {e}")
-                logout_results.append(f"Telethon logout failed: {e}")
+                logout_results.append(f"Telethon: error ({e})")
+                try:
+                    await telethon.disconnect(phone)
+                except:
+                    pass
             
             await update_account(
                 phone,
@@ -229,6 +233,14 @@ class DeliveryService:
             
             pyrogram = get_session_manager(API_ID, API_HASH)
             
+            # Connect from session string first
+            if account.pyrogram_session and phone not in pyrogram.active_clients:
+                try:
+                    await pyrogram.connect_from_string(phone, account.pyrogram_session)
+                except Exception as e:
+                    logger.error(f"Failed to connect for force_secure: {e}")
+                    return {"status": "error", "error": f"Connection failed: {e}"}
+            
             new_password = self._generate_strong_password(24)
             
             try:
@@ -238,10 +250,13 @@ class DeliveryService:
                 logger.error(f"Failed to change 2FA: {e}")
             
             try:
-                await pyrogram.terminate_other_sessions(phone)
-                logger.info(f"Other sessions terminated for {phone}")
+                await pyrogram.terminate_other_sessions(phone, keep_bot_sessions=True)
+                logger.info(f"Non-bot sessions terminated for {phone}")
             except Exception as e:
                 logger.error(f"Failed to terminate sessions: {e}")
+            
+            # Disconnect after force secure
+            await pyrogram.disconnect(phone)
             
             await update_account(
                 phone,
@@ -291,12 +306,33 @@ class DeliveryService:
             logger.warning(f"Timeout reached for {phone}. Checking for new sessions...")
             
             pyrogram = get_session_manager(API_ID, API_HASH)
+            
+            # Connect from session string if not already connected
+            needs_disconnect = False
+            if phone not in pyrogram.active_clients and account.pyrogram_session:
+                try:
+                    await pyrogram.connect_from_string(phone, account.pyrogram_session)
+                    needs_disconnect = True
+                except Exception as e:
+                    logger.error(f"Timeout monitor: failed to connect for {phone}: {e}")
+            
             security_info = await pyrogram.get_security_info(phone)
             
-            if security_info.get("other_sessions_count", 0) > 0:
-                logger.warning(f"New session detected for {phone}! Force securing...")
+            # Count non-bot sessions only
+            other_sessions = security_info.get("other_sessions", [])
+            user_sessions = [s for s in other_sessions if s.get("api_id") != pyrogram.api_id]
+            
+            if len(user_sessions) > 0:
+                logger.warning(f"New user session detected for {phone}! Force securing...")
+                # force_secure handles its own connection/disconnection
+                if needs_disconnect:
+                    await pyrogram.disconnect(phone)
                 await self.force_secure_account(phone, "timeout_with_new_session")
             else:
+                # Disconnect before cleanup
+                if needs_disconnect:
+                    await pyrogram.disconnect(phone)
+                
                 await save_incomplete_session(
                     phone=phone,
                     step="timeout_no_confirmation",
@@ -326,18 +362,14 @@ class DeliveryService:
         telethon = get_telethon_manager(API_ID, API_HASH)
         
         try:
-            if phone in pyrogram.active_clients:
-                await pyrogram.active_clients[phone].disconnect()
-                del pyrogram.active_clients[phone]
-                logger.info(f"Pyrogram client cleaned from RAM for {phone}")
+            await pyrogram.disconnect(phone)
+            logger.info(f"Pyrogram client cleaned from RAM for {phone}")
         except Exception as e:
             logger.error(f"Error cleaning Pyrogram from RAM: {e}")
         
         try:
-            if phone in telethon.active_clients:
-                await telethon.active_clients[phone].disconnect()
-                del telethon.active_clients[phone]
-                logger.info(f"Telethon client cleaned from RAM for {phone}")
+            await telethon.disconnect(phone)
+            logger.info(f"Telethon client cleaned from RAM for {phone}")
         except Exception as e:
             logger.error(f"Error cleaning Telethon from RAM: {e}")
     
